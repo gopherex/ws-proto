@@ -60,6 +60,10 @@ export class Mux {
       sendMsg: (sid, payload) =>
         this.writeFrame(encodeFrame({ streamId: sid, kind: Kind.KIND_MSG, payload })),
       halfClose: (sid) => this.writeFrame(encodeFrame({ streamId: sid, kind: Kind.KIND_HALF_CLOSE })),
+      reset: (sid) => {
+        this.writeFrame(encodeFrame({ streamId: sid, kind: Kind.KIND_RST }));
+        this.streams.delete(sid);
+      },
     });
     this.streams.set(id, stream);
 

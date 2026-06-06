@@ -1,5 +1,5 @@
 import { create, toBinary, fromBinary } from "@bufbuild/protobuf";
-import { FrameSchema, Kind as GenKind } from "./gen/transport_pb.js";
+import { FrameSchema, StatusSchema, Kind as GenKind } from "./gen/transport_pb.js";
 import type { Frame, Status } from "./gen/transport_pb.js";
 
 export type { Frame, Status };
@@ -43,15 +43,14 @@ export interface FrameInit {
 
 /** encodeFrame marshals a FrameInit into the binary wire form of a Frame. */
 export function encodeFrame(init: FrameInit): Uint8Array {
-  const status: Status | undefined =
+  const status =
     init.status === undefined
       ? undefined
-      : ({
-          $typeName: "wsproto.transport.v1.Status",
+      : create(StatusSchema, {
           code: init.status.code,
           message: init.status.message ?? "",
           details: init.status.details ?? [],
-        } as Status);
+        });
 
   const frame = create(FrameSchema, {
     streamId: init.streamId,

@@ -14,11 +14,22 @@ export interface ClientStream {
   /**
    * recv resolves with the next response MSG payload, with `null` on a clean
    * END (status OK), and rejects with a WsStatusError on a non-OK END or RST.
+   * Do not call concurrently or interleave with async iteration — pending pulls
+   * are served FIFO, so overlapping callers receive messages in registration
+   * order rather than per-caller order.
    */
   recv(): Promise<Uint8Array | null>;
-  /** responseHeaders resolves with the headers carried on END (server trailers/metadata). */
+  /**
+   * responseHeaders resolves with the headers/trailers carried on END (server
+   * metadata), for BOTH clean and error completions; the error status itself is
+   * surfaced through recv()/iteration, not here.
+   */
   responseHeaders(): Promise<Record<string, string>>;
-  /** Async iteration yields each response MSG payload until clean END; throws on error END/RST. */
+  /**
+   * Async iteration yields each response MSG payload until clean END; throws on
+   * error END/RST. Breaking out early (the iterator's return()) cancels the RPC
+   * via RST so the stream detaches and the server stops producing.
+   */
   [Symbol.asyncIterator](): AsyncIterator<Uint8Array>;
 }
 
@@ -26,6 +37,8 @@ export interface ClientStream {
 export interface StreamHooks {
   sendMsg(streamId: number, payload: Uint8Array): void;
   halfClose(streamId: number): void;
+  /** reset writes an RST frame and detaches the stream from the mux (client cancel). */
+  reset(streamId: number): void;
 }
 
 export class StreamImpl implements ClientStream {
@@ -38,22 +51,17 @@ export class StreamImpl implements ClientStream {
 
   private headers: Record<string, string> = {};
   private headersResolve!: (h: Record<string, string>) => void;
-  private headersReject!: (e: unknown) => void;
   private readonly headersPromise: Promise<Record<string, string>>;
   private headersSettled = false;
 
   constructor(id: number, hooks: StreamHooks) {
     this.id = id;
     this.hooks = hooks;
-    this.headersPromise = new Promise<Record<string, string>>((resolve, reject) => {
+    // headersPromise only ever resolves (with trailers); the error status is
+    // delivered through recv()/iteration, so there is no rejection path.
+    this.headersPromise = new Promise<Record<string, string>>((resolve) => {
       this.headersResolve = resolve;
-      this.headersReject = reject;
     });
-    // Attach a no-op rejection handler so that a non-OK END / RST / close that
-    // rejects the headers promise is never reported as an unhandled rejection
-    // when the caller never awaited responseHeaders(). Real awaiters still see
-    // the rejection because they await `headersPromise` directly.
-    this.headersPromise.catch(() => {});
   }
 
   send(payload: Uint8Array): void {
@@ -93,7 +101,26 @@ export class StreamImpl implements ClientStream {
         }
         return { done: false, value: r.value! };
       },
+      async return(): Promise<IteratorResult<Uint8Array>> {
+        // Early break/throw out of `for await`: cancel the RPC so the stream is
+        // detached from the mux and the server stops producing into a queue
+        // nobody drains.
+        self.cancel();
+        return { done: true, value: undefined };
+      },
     };
+  }
+
+  /** cancel aborts the RPC from the client: sends RST, detaches, ends iteration. */
+  cancel(): void {
+    if (this.finished) {
+      return;
+    }
+    this.finished = true;
+    this.sendClosed = true;
+    this.hooks.reset(this.id);
+    this.resolveHeaders(this.headers);
+    this.inbound.end();
   }
 
   // ---- mux-facing callbacks (not part of the public ClientStream surface) ----
@@ -113,13 +140,17 @@ export class StreamImpl implements ClientStream {
     this.inbound.end();
   }
 
-  /** endError is called by the mux on a non-OK END or RST. Rejects pending pulls. */
+  /**
+   * endError is called by the mux on a non-OK END or RST. Trailers (if the
+   * frame carried any) still resolve responseHeaders(); the status surfaces to
+   * the caller through the failed recv()/iteration pulls.
+   */
   endError(err: WsStatusError, headers: Record<string, string> = {}): void {
     if (this.finished) {
       return;
     }
     this.finished = true;
-    this.rejectHeaders(err);
+    this.resolveHeaders(headers);
     this.inbound.fail(err);
   }
 
@@ -130,13 +161,5 @@ export class StreamImpl implements ClientStream {
     this.headersSettled = true;
     this.headers = headers;
     this.headersResolve(headers);
-  }
-
-  private rejectHeaders(err: unknown): void {
-    if (this.headersSettled) {
-      return;
-    }
-    this.headersSettled = true;
-    this.headersReject(err);
   }
 }

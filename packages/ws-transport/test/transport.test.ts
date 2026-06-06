@@ -225,6 +225,47 @@ describe("WsTransport over FakeSocket", () => {
     expect(headers["x-trailer"]).toBe("ok");
   });
 
+  it("responseHeaders resolves with trailers even on a non-OK END", async () => {
+    const sock = new FakeSocket();
+    const t = WsTransport.fromSocket(sock);
+    const s = t.openStream("/s/ErrTrailers");
+    s.closeSend();
+    await tick();
+
+    sock.inject({
+      streamId: 1,
+      kind: Kind.KIND_END,
+      status: { code: 7, message: "denied" },
+      headers: { "x-trailer": "meta" },
+    });
+
+    const headers = await s.responseHeaders();
+    expect(headers["x-trailer"]).toBe("meta");
+    await expect(s.recv()).rejects.toBeInstanceOf(WsStatusError);
+  });
+
+  it("early break out of async iteration sends RST and detaches the stream", async () => {
+    const sock = new FakeSocket();
+    const t = WsTransport.fromSocket(sock);
+    const s = t.openStream("/s/Break");
+    s.closeSend();
+    await tick();
+
+    sock.inject({ streamId: 1, kind: Kind.KIND_MSG, payload: new Uint8Array([1]) });
+    sock.inject({ streamId: 1, kind: Kind.KIND_MSG, payload: new Uint8Array([2]) });
+
+    const got: number[] = [];
+    for await (const msg of s) {
+      got.push(msg[0]!);
+      break; // early exit -> iterator return() -> cancel() -> RST
+    }
+    await tick();
+
+    expect(got).toEqual([1]);
+    const rst = sock.sent.find((f) => f.kind === Kind.KIND_RST && f.streamId === 1);
+    expect(rst).toBeDefined();
+  });
+
   it("close() fails in-flight streams with a WsStatusError", async () => {
     const sock = new FakeSocket();
     const t = WsTransport.fromSocket(sock);
