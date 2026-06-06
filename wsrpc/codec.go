@@ -12,6 +12,7 @@ import (
 type frameConn interface {
 	WriteFrame(ctx context.Context, f *transport.Frame) error
 	ReadFrame(ctx context.Context) (*transport.Frame, error)
+	Ping(ctx context.Context) error
 	Close() error
 }
 

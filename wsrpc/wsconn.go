@@ -12,8 +12,8 @@ type wsConn struct {
 	c *websocket.Conn
 }
 
-func newWSConn(c *websocket.Conn) *wsConn {
-	c.SetReadLimit(-1)
+func newWSConn(c *websocket.Conn, readLimit int64) *wsConn {
+	c.SetReadLimit(readLimit)
 	return &wsConn{c: c}
 }
 
@@ -31,6 +31,10 @@ func (w *wsConn) ReadFrame(ctx context.Context) (*transport.Frame, error) {
 		return nil, err
 	}
 	return unmarshalFrame(b)
+}
+
+func (w *wsConn) Ping(ctx context.Context) error {
+	return w.c.Ping(ctx)
 }
 
 func (w *wsConn) Close() error {
