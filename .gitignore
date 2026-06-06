@@ -38,3 +38,6 @@ go.work.sum
 node_modules/
 packages/**/dist/
 packages/protoc-gen-ws-es/test/gen/
+
+# JetBrains IDE
+.idea/
