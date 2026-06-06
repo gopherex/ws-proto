@@ -202,6 +202,74 @@ package) before constructing the transport.
 
 ---
 
+## Middleware & gRPC interceptors (Go)
+
+Two complementary mechanisms add cross-cutting behavior on the server.
+
+### Native wsrpc middleware
+
+`wsrpc.WithMiddleware` wraps every RPC (all four kinds) with a `Middleware`. The
+first listed runs outermost; a middleware can read the stream, short-circuit by
+returning an error, or wrap the call. Handler panics, middleware panics and
+interceptor panics are recovered and surface to the client as `codes.Internal`.
+
+```go
+func Logging(next wsrpc.Handler) wsrpc.Handler {
+    return func(ctx context.Context, s *wsrpc.Stream) error {
+        start := time.Now()
+        err := next(ctx, s)
+        log.Printf("%s -> %v (%s)", s.Method(), wsrpc.FromError(err).Code, time.Since(start))
+        return err
+    }
+}
+
+func Auth(next wsrpc.Handler) wsrpc.Handler {
+    return func(ctx context.Context, s *wsrpc.Stream) error {
+        if s.Header()["x-token"] == "" {
+            return wsrpc.Errorf(codes.Unauthenticated, "missing token")
+        }
+        return next(ctx, s)
+    }
+}
+
+srv := wsrpc.NewServer(wsrpc.WithMiddleware(Logging, Auth)) // Logging outermost
+```
+
+### Reusing existing gRPC interceptors via the bridge
+
+When you serve an existing protoc-gen-go-grpc server through the bridge, you can
+run your real `grpc.UnaryServerInterceptor` / `grpc.StreamServerInterceptor`
+(auth, recovery, validation, otel, rate limiting, anything from
+[go-grpc-middleware](https://github.com/grpc-ecosystem/go-grpc-middleware)) —
+unchanged — over the WebSocket transport:
+
+```go
+handler := echov1.EchoServiceFromGRPC(grpcImpl,
+    wsrpc.WithUnaryInterceptor(grpc.ChainUnaryInterceptor(
+        recovery.UnaryServerInterceptor(),
+        auth.UnaryServerInterceptor(authFn),
+        otelgrpc.UnaryServerInterceptor(),
+    )),
+    wsrpc.WithStreamInterceptor(grpc.ChainStreamInterceptor(
+        recovery.StreamServerInterceptor(),
+        auth.StreamServerInterceptor(authFn),
+    )),
+)
+echov1.RegisterEchoServiceHandler(srv, handler)
+```
+
+The bridge mirrors grpc-go's own handler/interceptor flow (a generic
+`grpc.ServerStream` adapter wrapped in `grpc.GenericServerStream[Req,Res]`), so
+`info.FullMethod` is the real `/pkg.Service/Method` and interceptor chaining
+works as in a normal gRPC server. **Limitations:** response metadata set via
+`grpc.SetHeader`/`SendHeader`/`SetTrailer` is not propagated (wsrpc has no
+metadata channel mapped onto the wire yet), and a stream interceptor that wraps
+the `ServerStream` must delegate `SendMsg`/`RecvMsg` to the embedded stream
+(the idiomatic pattern). Use `wsrpc.WithConnContext` to read auth off the
+proxy-visible Upgrade request instead of response metadata.
+
+---
+
 ## Deploying behind a proxy
 
 > **This is the part that breaks naive WebSocket deployments.** Read it.
