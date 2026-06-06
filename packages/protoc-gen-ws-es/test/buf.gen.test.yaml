@@ -1,0 +1,14 @@
+version: v2
+inputs:
+  - directory: test
+plugins:
+  - local: ../../node_modules/.bin/protoc-gen-es
+    out: test/gen
+    opt:
+      - target=ts
+      - import_extension=js
+  - local: ./bin/protoc-gen-ws-es.js
+    out: test/gen
+    opt:
+      - target=ts
+      - import_extension=js

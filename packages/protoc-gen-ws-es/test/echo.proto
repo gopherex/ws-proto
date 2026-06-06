@@ -1,0 +1,27 @@
+syntax = "proto3";
+
+package echo.v1;
+
+// EchoService exercises all four RPC kinds.
+service EchoService {
+  // Unary: one request, one response.
+  rpc Unary(UnaryRequest) returns (UnaryResponse);
+  // ServerStream: one request, many responses.
+  rpc ServerStream(ServerStreamRequest) returns (stream ServerStreamResponse);
+  // ClientStream: many requests, one response.
+  rpc ClientStream(stream ClientStreamRequest) returns (ClientStreamResponse);
+  // Bidi: interleaved requests and responses.
+  rpc Bidi(stream BidiRequest) returns (stream BidiResponse);
+}
+
+message UnaryRequest { string name = 1; }
+message UnaryResponse { string greeting = 1; }
+
+message ServerStreamRequest { int32 count = 1; }
+message ServerStreamResponse { int32 index = 1; }
+
+message ClientStreamRequest { int32 value = 1; }
+message ClientStreamResponse { int32 sum = 1; }
+
+message BidiRequest { string text = 1; }
+message BidiResponse { string echo = 1; }
