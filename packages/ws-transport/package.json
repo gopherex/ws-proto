@@ -4,6 +4,29 @@
   "description": "WebSocket multiplexing transport for protobuf RPC services (analog of connect-web transport).",
   "type": "module",
   "license": "MIT",
+  "author": "yaroher <stolbunov.yaroslav@gmail.com>",
+  "homepage": "https://github.com/gopherex/ws-proto/tree/master/packages/ws-transport#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/gopherex/ws-proto.git",
+    "directory": "packages/ws-transport"
+  },
+  "bugs": {
+    "url": "https://github.com/gopherex/ws-proto/issues"
+  },
+  "keywords": [
+    "websocket",
+    "protobuf",
+    "rpc",
+    "grpc",
+    "connect",
+    "transport",
+    "streaming",
+    "buf"
+  ],
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
+  },
   "files": [
     "dist",
     "src"

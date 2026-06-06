@@ -1,0 +1,61 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_call: # reused by release.yml to gate releases on a green build
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  go:
+    name: Go (build, vet, test -race)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.25"
+          cache-dependency-path: go.sum
+      - name: gofmt
+        run: |
+          out=$(gofmt -l .)
+          if [ -n "$out" ]; then
+            echo "::error::gofmt needed on:"; echo "$out"; exit 1
+          fi
+      - name: go vet
+        run: go vet ./...
+      - name: go build
+        run: go build ./...
+      - name: build plugin
+        run: go build -o bin/protoc-gen-go-ws ./cmd/protoc-gen-go-ws
+      - name: go test -race
+        run: go test -race ./...
+
+  ts:
+    name: TypeScript (build, test, cross-lang)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      # The protoc-gen-ws-es cross-language test builds and runs the Go example
+      # server, so the Node job needs the Go toolchain too.
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.25"
+          cache-dependency-path: go.sum
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+      - name: install
+        run: npm ci
+      - name: build workspaces
+        run: npm run --workspaces build
+      - name: test workspaces
+        run: npm run --workspaces test

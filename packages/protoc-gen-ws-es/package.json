@@ -3,6 +3,30 @@
   "version": "0.1.0",
   "type": "module",
   "description": "protoc/buf plugin emitting WebSocket transport clients for protobuf-es v2",
+  "license": "MIT",
+  "author": "yaroher <stolbunov.yaroslav@gmail.com>",
+  "homepage": "https://github.com/gopherex/ws-proto/tree/master/packages/protoc-gen-ws-es#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/gopherex/ws-proto.git",
+    "directory": "packages/protoc-gen-ws-es"
+  },
+  "bugs": {
+    "url": "https://github.com/gopherex/ws-proto/issues"
+  },
+  "keywords": [
+    "protobuf",
+    "protoc-plugin",
+    "buf",
+    "protobuf-es",
+    "websocket",
+    "rpc",
+    "codegen",
+    "connect"
+  ],
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
+  },
   "bin": {
     "protoc-gen-ws-es": "./bin/protoc-gen-ws-es.js"
   },
