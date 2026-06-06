@@ -18,6 +18,9 @@ export class FakeSocket implements WebSocketLike {
   onclose: ((ev: unknown) => void) | null = null;
   onerror: ((ev: unknown) => void) | null = null;
 
+  /** The negotiated subprotocol; defaults to "" matching the browser WebSocket default. */
+  readonly protocol: string;
+
   /** Raw bytes the client has sent (in order). */
   readonly sentBytes: Uint8Array[] = [];
   /** Decoded Frames the client has sent (in order). */
@@ -27,7 +30,8 @@ export class FakeSocket implements WebSocketLike {
   closedReason: string | undefined;
   private isClosed = false;
 
-  constructor(opts: { autoOpen?: boolean } = {}) {
+  constructor(opts: { autoOpen?: boolean; protocol?: string } = {}) {
+    this.protocol = opts.protocol ?? "";
     if (opts.autoOpen !== false) {
       // Open after the current synchronous setup so onopen is registered.
       queueMicrotask(() => this.open());

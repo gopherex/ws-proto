@@ -14,6 +14,8 @@ export interface WebSocketLike {
   onopen: ((ev: unknown) => void) | null;
   onclose: ((ev: unknown) => void) | null;
   onerror: ((ev: unknown) => void) | null;
+  /** The subprotocol selected by the server during the RFC 6455 handshake. Empty string if none was negotiated. */
+  readonly protocol?: string;
 }
 
 /** WebSocket.readyState OPEN constant; defined locally to avoid DOM coupling. */

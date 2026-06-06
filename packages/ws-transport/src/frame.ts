@@ -63,7 +63,13 @@ export function encodeFrame(init: FrameInit): Uint8Array {
   return toBinary(FrameSchema, frame);
 }
 
-/** decodeFrame unmarshals the binary wire form of a Frame. */
+/**
+ * decodeFrame unmarshals the binary wire form of a Frame.
+ *
+ * Note: inbound message size bounding is intentionally delegated to the
+ * WebSocket layer and the server; no hard cap is applied here so that large
+ * but legitimate payloads are not rejected by the client runtime.
+ */
 export function decodeFrame(bytes: Uint8Array): Frame {
   return fromBinary(FrameSchema, bytes);
 }

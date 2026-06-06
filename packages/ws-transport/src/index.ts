@@ -1,4 +1,4 @@
-export { WsTransport } from "./transport.js";
+export { WsTransport, SUBPROTOCOL } from "./transport.js";
 export type { WebSocketLike } from "./transport.js";
 export type { ClientStream } from "./stream.js";
 export { WsStatusError } from "./status.js";

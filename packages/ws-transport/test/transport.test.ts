@@ -1,5 +1,5 @@
-import { describe, it, expect } from "vitest";
-import { WsTransport, WsStatusError, FakeSocket, Kind } from "../src/index.js";
+import { describe, it, expect, afterEach } from "vitest";
+import { WsTransport, WsStatusError, FakeSocket, Kind, SUBPROTOCOL } from "../src/index.js";
 
 /** tick yields to the microtask/timer queue so async plumbing settles. */
 const tick = () => new Promise<void>((r) => setTimeout(r, 0));
@@ -275,5 +275,47 @@ describe("WsTransport over FakeSocket", () => {
     t.close();
     await expect(s.recv()).rejects.toBeInstanceOf(WsStatusError);
     expect(sock.closedCode).toBe(1000);
+  });
+});
+
+describe("WsTransport subprotocol negotiation", () => {
+  // Save the original globalThis.WebSocket so we can restore it.
+  const originalWebSocket = (globalThis as Record<string, unknown>).WebSocket;
+
+  afterEach(() => {
+    (globalThis as Record<string, unknown>).WebSocket = originalWebSocket;
+  });
+
+  it("dials with the wsrpc.v1 subprotocol token", () => {
+    let capturedUrl: string | undefined;
+    let capturedProtocols: string | string[] | undefined;
+
+    // Minimal stub that records constructor args and implements WebSocketLike.
+    class StubWebSocket {
+      binaryType = "arraybuffer";
+      onmessage = null;
+      onopen = null;
+      onclose = null;
+      onerror = null;
+      readonly protocol = "";
+      constructor(url: string, protocols?: string | string[]) {
+        capturedUrl = url;
+        capturedProtocols = protocols;
+      }
+      send() {}
+      close() {}
+    }
+
+    (globalThis as Record<string, unknown>).WebSocket = StubWebSocket;
+
+    new WsTransport("ws://test-host/rpc");
+
+    expect(capturedUrl).toBe("ws://test-host/rpc");
+    expect(capturedProtocols).toBe(SUBPROTOCOL);
+    expect(capturedProtocols).toBe("wsrpc.v1");
+  });
+
+  it("SUBPROTOCOL constant equals 'wsrpc.v1'", () => {
+    expect(SUBPROTOCOL).toBe("wsrpc.v1");
   });
 });

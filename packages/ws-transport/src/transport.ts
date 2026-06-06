@@ -5,6 +5,14 @@ import type { ClientStream } from "./stream.js";
 export type { WebSocketLike };
 
 /**
+ * SUBPROTOCOL is the WebSocket subprotocol token offered during the RFC 6455
+ * handshake (`Sec-WebSocket-Protocol: wsrpc.v1`). The server selects this token
+ * to confirm it speaks the same framing protocol, and intermediary proxies can
+ * use it for traffic identification and routing.
+ */
+export const SUBPROTOCOL = "wsrpc.v1";
+
+/**
  * WsTransport dials (or wraps) one WebSocket and multiplexes RPC streams over
  * it. It is the untyped analog of connect-web's transport; Plan 4's generator
  * wraps openStream() with typed clients.
@@ -21,7 +29,9 @@ export class WsTransport {
       this.mux = new Mux(urlOrSocket as WebSocketLike);
       return;
     }
-    const ws = new WebSocket(urlOrSocket as string) as unknown as WebSocketLike;
+    // Offer the wsrpc.v1 subprotocol so the server can confirm it during the
+    // RFC 6455 handshake and proxies can identify wsrpc traffic.
+    const ws = new WebSocket(urlOrSocket as string, SUBPROTOCOL) as unknown as WebSocketLike;
     this.mux = new Mux(ws);
   }
 
