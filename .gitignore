@@ -30,3 +30,7 @@ go.work.sum
 # Editor/IDE
 # .idea/
 # .vscode/
+
+# Node / npm (TypeScript runtime package)
+node_modules/
+packages/**/dist/
