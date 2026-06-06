@@ -20,6 +20,7 @@ type serverConfig struct {
 	keepalive        time.Duration
 	keepaliveTimeout time.Duration
 	connContext      func(ctx context.Context, r *http.Request) context.Context
+	middleware       []Middleware
 }
 
 // ServerOption configures a Server.
@@ -47,6 +48,12 @@ func WithReadLimit(n int64) ServerOption {
 // by deriving the per-connection base context; values are visible via Stream.Context().
 func WithConnContext(fn func(ctx context.Context, r *http.Request) context.Context) ServerOption {
 	return func(c *serverConfig) { c.connContext = fn }
+}
+
+// WithMiddleware appends server middleware applied to every RPC. The first
+// middleware passed runs outermost. Multiple calls accumulate in order.
+func WithMiddleware(mw ...Middleware) ServerOption {
+	return func(c *serverConfig) { c.middleware = append(c.middleware, mw...) }
 }
 
 func defaultServerConfig() serverConfig {

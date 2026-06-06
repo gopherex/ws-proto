@@ -66,6 +66,7 @@ func (s *Server) serveStream(stream *Stream) {
 		_ = stream.end(&Status{Code: codes.Unimplemented, Message: "unknown method " + stream.method}, nil)
 		return
 	}
+	h = chain(h, s.cfg.middleware)
 	err := h(stream.ctx, stream)
 	st := FromError(err)
 	if st == nil {
