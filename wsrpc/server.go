@@ -16,12 +16,17 @@ type Handler func(ctx context.Context, stream *Stream) error
 // Server is an http.Handler that upgrades to WebSocket and dispatches streams
 // to registered handlers keyed by fully-qualified method.
 type Server struct {
+	cfg      serverConfig
 	mu       sync.RWMutex
 	handlers map[string]Handler
 }
 
-func NewServer() *Server {
-	return &Server{handlers: make(map[string]Handler)}
+func NewServer(opts ...ServerOption) *Server {
+	cfg := defaultServerConfig()
+	for _, o := range opts {
+		o(&cfg)
+	}
+	return &Server{cfg: cfg, handlers: make(map[string]Handler)}
 }
 
 // Register binds a handler to a method like "/pkg.Service/Method".
@@ -32,14 +37,24 @@ func (s *Server) Register(method string, h Handler) {
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	c, err := websocket.Accept(w, r, nil)
+	c, err := websocket.Accept(w, r, &websocket.AcceptOptions{
+		Subprotocols:   []string{Subprotocol},
+		OriginPatterns: s.cfg.originPatterns,
+	})
 	if err != nil {
 		return
 	}
-	conn := newWSConn(c)
-	mux := newMux(r.Context(), conn, func(stream *Stream) { go s.serveStream(stream) })
+	base := r.Context()
+	if s.cfg.connContext != nil {
+		base = s.cfg.connContext(base, r)
+	}
+	conn := newWSConn(c, s.cfg.readLimit)
+	mux := newMux(base, conn, func(stream *Stream) { go s.serveStream(stream) })
+	mux.startKeepalive(s.cfg.keepalive, s.cfg.keepaliveTimeout)
 	<-mux.ctx.Done()
-	_ = c.CloseNow()
+	if err := c.Close(websocket.StatusNormalClosure, ""); err != nil {
+		_ = c.CloseNow()
+	}
 }
 
 func (s *Server) serveStream(stream *Stream) {

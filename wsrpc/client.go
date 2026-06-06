@@ -12,13 +12,22 @@ type ClientConn struct {
 }
 
 // Dial opens a WebSocket to url (ws:// or wss://) and returns a ClientConn.
-func Dial(ctx context.Context, url string) (*ClientConn, error) {
-	c, _, err := websocket.Dial(ctx, url, nil)
+func Dial(ctx context.Context, url string, opts ...DialOption) (*ClientConn, error) {
+	cfg := defaultDialConfig()
+	for _, o := range opts {
+		o(&cfg)
+	}
+	c, _, err := websocket.Dial(ctx, url, &websocket.DialOptions{
+		Subprotocols: []string{Subprotocol},
+		HTTPHeader:   cfg.header,
+	})
 	if err != nil {
 		return nil, err
 	}
-	conn := newWSConn(c)
-	return &ClientConn{mux: newMux(ctx, conn, nil)}, nil
+	conn := newWSConn(c, cfg.readLimit)
+	mux := newMux(ctx, conn, nil)
+	mux.startKeepalive(cfg.keepalive, cfg.keepaliveTimeout)
+	return &ClientConn{mux: mux}, nil
 }
 
 // newClientConn wraps an existing frameConn (used by tests over a pipe).
