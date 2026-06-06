@@ -1,0 +1,25 @@
+lint:
+  use:
+    - DEFAULT
+  enum_zero_value_suffix: _UNSPECIFIED
+  service_suffix: Service
+  except:
+    - PACKAGE_VERSION_SUFFIX
+  allow_comment_ignores: false
+deps:
+generate:
+  inputs:
+    - directory: proto
+  plugins:
+    - name: go
+      out: .
+      opts:
+        paths: source_relative
+    - name: go-grpc
+      out: .
+      opts:
+        paths: source_relative
+    - name: go-ws
+      out: .
+      opts:
+        paths: source_relative
