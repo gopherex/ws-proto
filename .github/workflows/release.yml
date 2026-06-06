@@ -96,10 +96,10 @@ jobs:
         run: npm ci
       - name: Build workspaces
         run: npm run --workspaces build
-      - name: Publish @gopherex/ws-transport
+      - name: Publish @gopherex/ws-proto-transport
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: npm publish --workspace @gopherex/ws-transport
+        run: npm publish --workspace @gopherex/ws-proto-transport
       - name: Publish @gopherex/protoc-gen-ws-es
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

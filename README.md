@@ -12,7 +12,7 @@ It ships two code generators and two runtimes:
 | `protoc-gen-go-ws` | Go (protogen) | `protoc-gen-go-grpc` / `connect-go` | `*_ws.pb.go`: typed handler interface, typed client, stream wrappers, gRPC bridge |
 | `@gopherex/protoc-gen-ws-es` | TypeScript (`@bufbuild/protoplugin`) | `protoc-gen-connect-es` | `*_ws_pb.ts`: typed service client |
 | `wsrpc` (Go module) | Go | grpc-go / connect runtime | mux, framing, HTTP-upgrade server, dial client |
-| `@gopherex/ws-transport` | TypeScript | connect-web transport | mux, framing, browser/node client |
+| `@gopherex/ws-proto-transport` | TypeScript | connect-web transport | mux, framing, browser/node client |
 
 The ES generator interoperates with [`protoc-gen-es`](https://github.com/bufbuild/protobuf-es)
 v2 output (it imports the generated `*_pb.ts` message types and schemas).
@@ -69,7 +69,7 @@ Point the scope at the GitHub registry and authenticate with a token that has
 ```
 
 ```bash
-npm install @gopherex/ws-transport
+npm install @gopherex/ws-proto-transport
 npm install -D @gopherex/protoc-gen-ws-es @bufbuild/protoc-gen-es @bufbuild/buf
 ```
 
@@ -183,7 +183,7 @@ res, err := client.Unary(ctx, &echov1.UnaryRequest{Name: "bob"})
 ### TypeScript client (browser or node)
 
 ```ts
-import { WsTransport } from "@gopherex/ws-transport";
+import { WsTransport } from "@gopherex/ws-proto-transport";
 import { EchoServiceClient } from "./gen/echo_ws_pb.js";
 
 const client = new EchoServiceClient(new WsTransport("wss://api.example.com/rpc"));

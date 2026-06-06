@@ -12,8 +12,8 @@ export function generateTs(schema: Schema): void {
     const f = schema.generateFile(file.name + "_ws_pb.ts");
     f.preamble(file);
 
-    // Runtime import: WsTransport from @gopherex/ws-transport.
-    const WsTransport = f.import("WsTransport", "@gopherex/ws-transport");
+    // Runtime import: WsTransport from @gopherex/ws-proto-transport.
+    const WsTransport = f.import("WsTransport", "@gopherex/ws-proto-transport");
 
     for (const service of file.services) {
       printClient(f, service, WsTransport);

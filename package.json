@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "workspaces": [
-    "packages/ws-transport",
+    "packages/ws-proto-transport",
     "packages/protoc-gen-ws-es"
   ]
 }

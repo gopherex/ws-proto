@@ -1,15 +1,15 @@
 {
-  "name": "@gopherex/ws-transport",
+  "name": "@gopherex/ws-proto-transport",
   "version": "1.0.0",
   "description": "WebSocket multiplexing transport for protobuf RPC services (analog of connect-web transport).",
   "type": "module",
   "license": "MIT",
   "author": "yaroher <stolbunov.yaroslav@gmail.com>",
-  "homepage": "https://github.com/gopherex/ws-proto/tree/master/packages/ws-transport#readme",
+  "homepage": "https://github.com/gopherex/ws-proto/tree/master/packages/ws-proto-transport#readme",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/gopherex/ws-proto.git",
-    "directory": "packages/ws-transport"
+    "directory": "packages/ws-proto-transport"
   },
   "bugs": {
     "url": "https://github.com/gopherex/ws-proto/issues"

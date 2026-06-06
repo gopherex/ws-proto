@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll } from "vitest";
-import { WsTransport, FakeSocket, WsStatusError, Kind } from "@gopherex/ws-transport";
+import { WsTransport, FakeSocket, WsStatusError, Kind } from "@gopherex/ws-proto-transport";
 import { create } from "@bufbuild/protobuf";
 import type { GenMessage } from "@bufbuild/protobuf/codegenv2";
 

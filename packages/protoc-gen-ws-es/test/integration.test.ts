@@ -5,13 +5,13 @@ import { dirname, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { mkdtempSync, rmSync } from "node:fs";
 
-// Node WebSocket polyfill for the browser-oriented @gopherex/ws-transport.
+// Node WebSocket polyfill for the browser-oriented @gopherex/ws-proto-transport.
 import { WebSocket as WsImpl } from "ws";
 if (typeof (globalThis as any).WebSocket === "undefined") {
   (globalThis as any).WebSocket = WsImpl;
 }
 
-import { WsTransport } from "@gopherex/ws-transport";
+import { WsTransport } from "@gopherex/ws-proto-transport";
 import { create } from "@bufbuild/protobuf";
 import type { GenMessage } from "@bufbuild/protobuf/codegenv2";
 
