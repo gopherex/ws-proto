@@ -95,6 +95,21 @@ func TestMiddlewareRunsAndSeesMethod(t *testing.T) {
 	require.Equal(t, "/t/Echo", seenMethod)
 }
 
+func TestPanicInHandlerRecovered(t *testing.T) {
+	cc := dialWithServer(t, func(srv *Server) {
+		srv.Register("/t/Boom", func(ctx context.Context, s *Stream) error {
+			panic("kaboom")
+		})
+	})
+	s, err := cc.NewStream(context.Background(), "/t/Boom", nil)
+	require.NoError(t, err)
+	require.NoError(t, s.CloseSend())
+	err = s.Recv(&wrapperspb.StringValue{})
+	st := FromError(err)
+	require.Equal(t, codes.Internal, st.Code)
+	require.Contains(t, st.Message, "panic")
+}
+
 func TestMiddlewareShortCircuits(t *testing.T) {
 	var handlerRan bool
 	deny := func(next Handler) Handler {

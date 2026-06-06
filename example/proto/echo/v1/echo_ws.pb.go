@@ -316,7 +316,11 @@ func (b *echoServiceGRPCBridge) Unary(ctx context.Context, req *UnaryRequest) (*
 	if err != nil {
 		return nil, err
 	}
-	return resp.(*UnaryResponse), nil
+	out, ok := resp.(*UnaryResponse)
+	if !ok {
+		return nil, wsrpc.Errorf(codes.Internal, "wsrpc: EchoService.Unary interceptor returned unexpected response type")
+	}
+	return out, nil
 }
 
 func (b *echoServiceGRPCBridge) ServerStream(ctx context.Context, req *ServerStreamRequest, stream *EchoService_ServerStreamServerWS) error {

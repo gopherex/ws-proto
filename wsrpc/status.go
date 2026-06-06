@@ -21,7 +21,8 @@ func (s *Status) Error() string {
 // GRPCStatus makes *Status interoperable with the google.golang.org/grpc/status
 // package, so status.Code(err) / status.FromError(err) recognize a wsrpc error
 // (e.g. the code surfaced to a client when a gRPC interceptor on the FromGRPC
-// bridge rejects an RPC).
+// bridge rejects an RPC). Note: Details are not carried into the gRPC status
+// (nor read back in FromError) — only code and message round-trip today.
 func (s *Status) GRPCStatus() *status.Status {
 	return status.New(s.Code, s.Message)
 }

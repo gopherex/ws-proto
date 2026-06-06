@@ -125,7 +125,11 @@ func (g *Generator) genBridgeMethod(gf *protogen.GeneratedFile, svc *protogen.Se
 		gf.P("\tif err != nil {")
 		gf.P("\t\treturn nil, err")
 		gf.P("\t}")
-		gf.P("\treturn resp.(*", res, "), nil")
+		gf.P("\tout, ok := resp.(*", res, ")")
+		gf.P("\tif !ok {")
+		gf.P("\t\treturn nil, ", g.errorfRef(gf), "(", codeInternal, ", \"wsrpc: ", svc.GoName, ".", m.GoName, " interceptor returned unexpected response type\")")
+		gf.P("\t}")
+		gf.P("\treturn out, nil")
 		gf.P("}")
 		gf.P()
 

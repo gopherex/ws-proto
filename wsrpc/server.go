@@ -2,6 +2,7 @@ package wsrpc
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"sync"
 
@@ -59,6 +60,13 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) serveStream(stream *Stream) {
 	defer stream.mux.remove(stream.id)
+	// Recover panics from handlers, middleware, or gRPC interceptors so one bad
+	// RPC ends with codes.Internal instead of taking down the whole process.
+	defer func() {
+		if r := recover(); r != nil {
+			_ = stream.end(&Status{Code: codes.Internal, Message: fmt.Sprintf("wsrpc: panic: %v", r)}, nil)
+		}
+	}()
 	s.mu.RLock()
 	h := s.handlers[stream.method]
 	s.mu.RUnlock()
