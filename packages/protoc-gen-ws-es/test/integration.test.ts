@@ -12,17 +12,20 @@ if (typeof (globalThis as any).WebSocket === "undefined") {
 }
 
 import { WsTransport } from "@gopherex/ws-transport";
-import { EchoServiceClient } from "./gen/echo_ws_pb.js";
 import { create } from "@bufbuild/protobuf";
-import {
-  UnaryRequestSchema,
-  ServerStreamRequestSchema,
-  ClientStreamRequestSchema,
-  BidiRequestSchema,
-} from "./gen/echo_pb.js";
+import type { GenMessage } from "@bufbuild/protobuf/codegenv2";
 
 const here = dirname(fileURLToPath(import.meta.url));
+const pkgRoot = resolve(here, ".."); // packages/protoc-gen-ws-es
 const repoRoot = resolve(here, "..", "..", ".."); // packages/protoc-gen-ws-es -> repo root
+
+// Generated symbols are loaded dynamically in beforeAll, after we (re)generate
+// them, so this file can be collected even when test/gen does not exist yet.
+let EchoServiceClient: typeof import("./gen/echo_ws_pb.js").EchoServiceClient;
+let UnaryRequestSchema: GenMessage<any>;
+let ServerStreamRequestSchema: GenMessage<any>;
+let ClientStreamRequestSchema: GenMessage<any>;
+let BidiRequestSchema: GenMessage<any>;
 const ADDR = "127.0.0.1:8910";
 const WS_URL = `ws://${ADDR}/`;
 
@@ -49,6 +52,20 @@ function waitForListening(proc: ChildProcessWithoutNullStreams): Promise<void> {
 }
 
 beforeAll(async () => {
+  // Ensure the generated client/messages exist (the unit-test file may have
+  // cleaned test/gen; generation is idempotent), then load them dynamically.
+  execFileSync("npx", ["buf", "generate", "--template", "test/buf.gen.test.yaml"], {
+    cwd: pkgRoot,
+    stdio: "inherit",
+  });
+  ({ EchoServiceClient } = await import("./gen/echo_ws_pb.js"));
+  ({
+    UnaryRequestSchema,
+    ServerStreamRequestSchema,
+    ClientStreamRequestSchema,
+    BidiRequestSchema,
+  } = await import("./gen/echo_pb.js"));
+
   // Build the Go server to a real binary first so killing the spawned process
   // actually terminates the listener (`go run` forks a separate child that can
   // outlive the wrapper and leak the bound port between runs).

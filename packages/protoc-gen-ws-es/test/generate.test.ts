@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll } from "vitest";
 import { execFileSync } from "node:child_process";
-import { readFileSync, existsSync, rmSync } from "node:fs";
+import { readFileSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 
@@ -14,9 +14,10 @@ function run(cmd: string, args: string[]): void {
 
 describe("protoc-gen-ws-es generation", () => {
   beforeAll(() => {
-    rmSync(resolve(here, "gen"), { recursive: true, force: true });
     run("npm", ["run", "build"]);
-    // buf must see the built plugin bin as executable.
+    // buf must see the built plugin bin as executable. Generation is idempotent
+    // (buf overwrites), so we do not delete test/gen here — that would race the
+    // integration test file, which runs in the same vitest invocation.
     run("npx", ["buf", "generate", "--template", "test/buf.gen.test.yaml"]);
   });
 
