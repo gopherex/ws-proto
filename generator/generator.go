@@ -33,5 +33,4 @@ func (g *Generator) Generate() error {
 	return nil
 }
 
-func (g *Generator) genClient(gf *protogen.GeneratedFile, svc *protogen.Service)     {}
 func (g *Generator) genGRPCBridge(gf *protogen.GeneratedFile, svc *protogen.Service) {}
