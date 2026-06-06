@@ -71,3 +71,56 @@ describe("generated client error edges", () => {
     expect(rst).toBeDefined();
   });
 });
+
+describe("generated client call options", () => {
+  it("unary invokes onTrailer with the response trailers", async () => {
+    const sock = new FakeSocket();
+    const client = new EchoServiceClient(WsTransport.fromSocket(sock));
+    let trailers: Record<string, string> | undefined;
+    const p = client.unary(create(UnaryRequestSchema, { name: "x" }), {
+      onTrailer: (t) => {
+        trailers = t;
+      },
+    });
+    await tick();
+    sock.inject({ streamId: 1, kind: Kind.KIND_MSG, payload: new Uint8Array() });
+    sock.inject({
+      streamId: 1,
+      kind: Kind.KIND_END,
+      status: { code: 0 },
+      headers: { "x-trailer": "done" },
+    });
+    await p;
+    expect(trailers).toBeDefined();
+    expect(trailers!["x-trailer"]).toBe("done");
+  });
+
+  it("unary sends request metadata via options.headers", async () => {
+    const sock = new FakeSocket();
+    const client = new EchoServiceClient(WsTransport.fromSocket(sock));
+    const p = client.unary(create(UnaryRequestSchema, { name: "x" }), {
+      headers: { authorization: "bearer t" },
+    });
+    await tick();
+    const open = sock.sent.find((fr) => fr.kind === Kind.KIND_OPEN && fr.streamId === 1);
+    expect(open).toBeDefined();
+    expect(open!.headers["authorization"]).toBe("bearer t");
+    sock.inject({ streamId: 1, kind: Kind.KIND_MSG, payload: new Uint8Array() });
+    sock.inject({ streamId: 1, kind: Kind.KIND_END, status: { code: 0 } });
+    await p;
+  });
+
+  it("unary aborts when options.signal fires (rejects, sends RST)", async () => {
+    const sock = new FakeSocket();
+    const client = new EchoServiceClient(WsTransport.fromSocket(sock));
+    const controller = new AbortController();
+    const p = client.unary(create(UnaryRequestSchema, { name: "x" }), {
+      signal: controller.signal,
+    });
+    await tick();
+    controller.abort();
+    await expect(p).rejects.toBeInstanceOf(WsStatusError);
+    const rst = sock.sent.find((fr) => fr.kind === Kind.KIND_RST && fr.streamId === 1);
+    expect(rst).toBeDefined();
+  });
+});
