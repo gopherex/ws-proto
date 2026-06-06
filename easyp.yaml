@@ -1,0 +1,18 @@
+lint:
+  use:
+    - DEFAULT
+  enum_zero_value_suffix: _UNSPECIFIED
+  service_suffix: API
+  ignore: []
+  except:
+    - PACKAGE_VERSION_SUFFIX
+  allow_comment_ignores: false
+deps:
+generate:
+  inputs:
+    - directory: transport
+  plugins:
+    - name: go
+      out: .
+      opts:
+        paths: source_relative
