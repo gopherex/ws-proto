@@ -93,8 +93,6 @@ service EchoService {
 ```
 
 No proto options are required; routes derive from `/pkg.Service/Method`.
-Optional `(wsproto.transport.v1.service)` / `(...method)` options
-(`transport/options.proto`) allow a route prefix or per-method overrides.
 
 ---
 
