@@ -1,0 +1,9 @@
+{
+  "name": "ws-proto-workspace",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/ws-transport",
+    "packages/protoc-gen-ws-es"
+  ]
+}

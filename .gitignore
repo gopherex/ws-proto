@@ -37,3 +37,4 @@ go.work.sum
 # Node / npm (TypeScript runtime package)
 node_modules/
 packages/**/dist/
+packages/protoc-gen-ws-es/test/gen/
