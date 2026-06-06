@@ -192,6 +192,22 @@ func TestBridgeUnary(t *testing.T) {
 	require.Equal(t, "grpc x", res.Greeting)
 }
 
+func TestBridgeServerStream(t *testing.T) {
+	client := dialGRPC(t)
+	stream, err := client.ServerStream(context.Background(), &echov1.ServerStreamRequest{Count: 3})
+	require.NoError(t, err)
+	var got []int32
+	for {
+		res, err := stream.Recv()
+		if err == io.EOF {
+			break
+		}
+		require.NoError(t, err)
+		got = append(got, res.Index)
+	}
+	require.Equal(t, []int32{0, 1, 2}, got)
+}
+
 func TestBridgeClientStream(t *testing.T) {
 	client := dialGRPC(t)
 	stream, err := client.ClientStream(context.Background())

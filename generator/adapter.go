@@ -57,7 +57,7 @@ func (g *Generator) genBridgeMethod(gf *protogen.GeneratedFile, svc *protogen.Se
 		gf.P("\t\treturn nil, err")
 		gf.P("\t}")
 		gf.P("\tif sh.resp == nil {")
-		gf.P("\t\treturn new(", res, "), nil")
+		gf.P("\t\treturn nil, ", g.errorfRef(gf), "(", gf.QualifiedGoIdent(codesImport.Ident("Internal")), ", \"wsrpc: ", svc.GoName, ".", m.GoName, " handler returned without SendAndClose\")")
 		gf.P("\t}")
 		gf.P("\treturn sh.resp, nil")
 		gf.P("}")

@@ -278,7 +278,7 @@ func (b *echoServiceGRPCBridge) ClientStream(ctx context.Context, stream *EchoSe
 		return nil, err
 	}
 	if sh.resp == nil {
-		return new(ClientStreamResponse), nil
+		return nil, wsrpc.Errorf(codes.Internal, "wsrpc: EchoService.ClientStream handler returned without SendAndClose")
 	}
 	return sh.resp, nil
 }
