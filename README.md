@@ -197,6 +197,31 @@ for await (const msg of client.serverStream({ count: 3 })) {
 }
 ```
 
+Every method takes an optional `CallOptions` as its last argument:
+
+```ts
+const controller = new AbortController();
+
+const res = await client.unary(
+  { name: "bob" },
+  {
+    // request metadata -> headers on the opening frame
+    headers: { authorization: "bearer …" },
+    // cancellation: aborting sends RST; the call rejects with a WsStatusError
+    signal: controller.signal,
+    // response trailers, reported once the server ends the stream
+    onTrailer: (trailer) => console.log(trailer["x-elapsed-ms"]),
+  },
+);
+
+// later, to cancel an in-flight call:
+controller.abort();
+```
+
+`CallOptions` (`headers`, `signal`, `onTrailer`) is generated into each
+`*_ws_pb.ts` and accepted by all four RPC kinds. For streaming methods,
+`onTrailer` fires after the response stream completes cleanly.
+
 In Node, provide a `WebSocket` global (e.g. the [`ws`](https://www.npmjs.com/package/ws)
 package) before constructing the transport.
 
