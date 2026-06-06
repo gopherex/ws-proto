@@ -55,6 +55,9 @@ export class StreamImpl implements ClientStream {
   private sendClosed = false;
   private finished = false;
 
+  /** Callbacks run exactly once on any terminal path (used to detach abort listeners). */
+  private closeCbs: Array<() => void> = [];
+
   private headers: Record<string, string> = {};
   private headersResolve!: (h: Record<string, string>) => void;
   private readonly headersPromise: Promise<Record<string, string>>;
@@ -127,6 +130,47 @@ export class StreamImpl implements ClientStream {
     this.hooks.reset(this.id);
     this.resolveHeaders(this.headers);
     this.inbound.end();
+    this.runClose();
+  }
+
+  /**
+   * onClose registers a callback invoked once the stream reaches any terminal
+   * state (clean END, error END/RST, cancel, or abort). If the stream is
+   * already finished the callback runs immediately. Used to detach the abort
+   * listener so it never leaks past stream completion.
+   */
+  onClose(cb: () => void): void {
+    if (this.finished) {
+      cb();
+      return;
+    }
+    this.closeCbs.push(cb);
+  }
+
+  /** runClose invokes and clears the registered close callbacks (idempotent). */
+  private runClose(): void {
+    const cbs = this.closeCbs;
+    this.closeCbs = [];
+    for (const cb of cbs) {
+      cb();
+    }
+  }
+
+  /**
+   * abort terminates the RPC due to an AbortSignal: sends RST and detaches (like
+   * cancel), resolves trailers, and rejects pending recv()/iteration with the
+   * abort error. No-op if the stream already finished.
+   */
+  abort(err: WsStatusError): void {
+    if (this.finished) {
+      return;
+    }
+    this.finished = true;
+    this.sendClosed = true;
+    this.hooks.reset(this.id);
+    this.resolveHeaders(this.headers);
+    this.inbound.fail(err);
+    this.runClose();
   }
 
   // ---- mux-facing callbacks (not part of the public ClientStream surface) ----
@@ -144,6 +188,7 @@ export class StreamImpl implements ClientStream {
     this.finished = true;
     this.resolveHeaders(headers);
     this.inbound.end();
+    this.runClose();
   }
 
   /**
@@ -158,6 +203,7 @@ export class StreamImpl implements ClientStream {
     this.finished = true;
     this.resolveHeaders(headers);
     this.inbound.fail(err);
+    this.runClose();
   }
 
   private resolveHeaders(headers: Record<string, string>): void {

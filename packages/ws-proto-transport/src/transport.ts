@@ -1,8 +1,8 @@
 import { Mux } from "./mux.js";
-import type { WebSocketLike } from "./mux.js";
+import type { WebSocketLike, StreamInit } from "./mux.js";
 import type { ClientStream } from "./stream.js";
 
-export type { WebSocketLike };
+export type { WebSocketLike, StreamInit };
 
 /**
  * SUBPROTOCOL is the WebSocket subprotocol token offered during the RFC 6455
@@ -40,9 +40,9 @@ export class WsTransport {
     return new WsTransport(ws, true);
   }
 
-  /** openStream begins a new RPC: sends OPEN(method, headers) and returns the stream. */
-  openStream(method: string, headers: Record<string, string> = {}): ClientStream {
-    return this.mux.openStream(method, headers);
+  /** openStream begins a new RPC: sends OPEN(method, init.headers) and returns the stream. */
+  openStream(method: string, init?: StreamInit): ClientStream {
+    return this.mux.openStream(method, init);
   }
 
   /** close tears down all in-flight streams and closes the socket. */

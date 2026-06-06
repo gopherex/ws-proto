@@ -9,7 +9,7 @@ describe("WsTransport over FakeSocket", () => {
     const sock = new FakeSocket();
     const t = WsTransport.fromSocket(sock);
 
-    t.openStream("/pkg.Svc/Unary", { auth: "token" });
+    t.openStream("/pkg.Svc/Unary", { headers: { auth: "token" } });
     await tick();
 
     const open = sock.sent.find((f) => f.kind === Kind.KIND_OPEN);

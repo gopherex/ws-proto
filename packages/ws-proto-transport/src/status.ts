@@ -35,3 +35,14 @@ export function statusErrorFromProto(status: Status | undefined): WsStatusError 
   }
   return new WsStatusError(status.code, status.message, status.details ?? []);
 }
+
+/**
+ * abortError builds the WsStatusError used when an RPC is aborted via an
+ * AbortSignal. The code is CANCELLED; the message reflects the signal's reason
+ * when it is an Error, otherwise a generic "request aborted".
+ */
+export function abortError(signal: AbortSignal): WsStatusError {
+  const reason = (signal as { reason?: unknown }).reason;
+  const message = reason instanceof Error ? reason.message : "request aborted";
+  return new WsStatusError(CODE_CANCELLED, message);
+}

@@ -1,6 +1,18 @@
 import { encodeFrame, decodeFrame, Kind } from "./frame.js";
 import { StreamImpl } from "./stream.js";
-import { WsStatusError, statusErrorFromProto, CODE_CANCELLED } from "./status.js";
+import { WsStatusError, statusErrorFromProto, CODE_CANCELLED, abortError } from "./status.js";
+
+/**
+ * StreamInit configures a new RPC stream opened via openStream: request
+ * metadata (headers carried on the OPEN frame) and an optional AbortSignal that
+ * aborts the RPC (sends RST; recv()/iteration reject) when triggered.
+ */
+export interface StreamInit {
+  /** Request metadata sent as headers on the OPEN frame. */
+  headers?: Record<string, string>;
+  /** Aborts the RPC when triggered: sends RST and rejects recv()/iteration. */
+  signal?: AbortSignal;
+}
 
 /**
  * WebSocketLike is the minimal browser-WebSocket surface the mux drives. The
@@ -54,7 +66,7 @@ export class Mux {
   }
 
   /** openStream allocates an odd stream id, registers the stream, and sends OPEN. */
-  openStream(method: string, headers: Record<string, string>): StreamImpl {
+  openStream(method: string, init?: StreamInit): StreamImpl {
     const id = this.nextId;
     this.nextId += 2;
 
@@ -69,7 +81,21 @@ export class Mux {
     });
     this.streams.set(id, stream);
 
-    this.writeFrame(encodeFrame({ streamId: id, kind: Kind.KIND_OPEN, method, headers }));
+    this.writeFrame(
+      encodeFrame({ streamId: id, kind: Kind.KIND_OPEN, method, headers: init?.headers ?? {} }),
+    );
+
+    const signal = init?.signal;
+    if (signal) {
+      if (signal.aborted) {
+        stream.abort(abortError(signal));
+      } else {
+        const onAbort = () => stream.abort(abortError(signal));
+        signal.addEventListener("abort", onAbort, { once: true });
+        stream.onClose(() => signal.removeEventListener("abort", onAbort));
+      }
+    }
+
     return stream;
   }
 
