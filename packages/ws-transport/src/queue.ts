@@ -6,8 +6,9 @@
  *   - push(v): enqueue a value. If a pull is waiting, it is resolved immediately.
  *   - end():   signal a clean end-of-stream. Buffered values are still drained
  *              by subsequent pulls; once drained, pulls resolve `{ done: true }`.
- *   - fail(e): signal an error end-of-stream. Buffered values are discarded and
- *              all current/future pulls reject with `e`.
+ *   - fail(e): signal an error end-of-stream. Buffered values are still drained
+ *              by subsequent pulls first; once drained, pulls reject with `e`.
+ *              Any pull already waiting (queue empty) rejects immediately.
  *
  * Backpressure: v1 is intentionally UNBOUNDED. A slow consumer cannot slow a
  * fast producer; memory grows with the backlog. Credit-based per-stream flow
@@ -58,7 +59,12 @@ export class AsyncQueue<T> {
       return;
     }
     this.error = error ?? new Error("AsyncQueue failed");
-    this.values.length = 0;
+    // Buffered values are retained and drained by subsequent pulls BEFORE the
+    // error surfaces (pull() checks `values` before `error`). This mirrors a
+    // clean end: any MSG that arrived before an RST is still delivered, then
+    // the failure is raised. Any waiter is waiting precisely because `values`
+    // is empty (push always resolves a waiter ahead of buffering), so rejecting
+    // waiters here is correct.
     while (this.waiters.length > 0) {
       const waiter = this.waiters.shift()!;
       waiter.reject(this.error);

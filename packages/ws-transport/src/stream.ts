@@ -49,6 +49,11 @@ export class StreamImpl implements ClientStream {
       this.headersResolve = resolve;
       this.headersReject = reject;
     });
+    // Attach a no-op rejection handler so that a non-OK END / RST / close that
+    // rejects the headers promise is never reported as an unhandled rejection
+    // when the caller never awaited responseHeaders(). Real awaiters still see
+    // the rejection because they await `headersPromise` directly.
+    this.headersPromise.catch(() => {});
   }
 
   send(payload: Uint8Array): void {
