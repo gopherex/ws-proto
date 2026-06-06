@@ -43,6 +43,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) serveStream(stream *Stream) {
+	defer stream.mux.remove(stream.id)
 	s.mu.RLock()
 	h := s.handlers[stream.method]
 	s.mu.RUnlock()

@@ -115,8 +115,7 @@ func (m *Mux) route(f *transport.Frame) {
 func (m *Mux) failAll(err error) {
 	m.mu.Lock()
 	for id, s := range m.streams {
-		s.endSt = FromError(err)
-		s.cancel()
+		s.failWith(err)
 		delete(m.streams, id)
 	}
 	m.mu.Unlock()

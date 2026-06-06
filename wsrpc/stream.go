@@ -19,25 +19,27 @@ type Stream struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 
-	header map[string]string // headers received on OPEN (server) or END (client trailers)
+	mu     sync.Mutex
+	header map[string]string // guarded by mu
+	endSt  *Status           // guarded by mu
 
-	recvCh chan *transport.Frame // MSG/END/RST frames routed here by the mux
+	recvCh     chan *transport.Frame // MSG/END/RST frames routed here by the mux
+	halfClosed chan struct{}         // closed once when peer half-closes (inbound)
 
-	mu       sync.Mutex
-	sendDone bool
-	closed   bool
-	endSt    *Status // set when END/RST observed
+	sendDone     bool // guarded by mu
+	halfCloseOne sync.Once
 }
 
 func newStream(ctx context.Context, mux *Mux, id uint32, method string) *Stream {
 	c, cancel := context.WithCancel(ctx)
 	return &Stream{
-		id:     id,
-		method: method,
-		mux:    mux,
-		ctx:    c,
-		cancel: cancel,
-		recvCh: make(chan *transport.Frame, 16),
+		id:         id,
+		method:     method,
+		mux:        mux,
+		ctx:        c,
+		cancel:     cancel,
+		recvCh:     make(chan *transport.Frame, 16),
+		halfClosed: make(chan struct{}),
 	}
 }
 
@@ -48,7 +50,11 @@ func (s *Stream) Context() context.Context { return s.ctx }
 func (s *Stream) Method() string { return s.method }
 
 // Header returns headers/trailers observed for this stream.
-func (s *Stream) Header() map[string]string { return s.header }
+func (s *Stream) Header() map[string]string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.header
+}
 
 // Send marshals msg and writes a MSG frame.
 func (s *Stream) Send(msg proto.Message) error {
@@ -66,31 +72,40 @@ func (s *Stream) Send(msg proto.Message) error {
 // Recv waits for the next MSG and unmarshals into msg. Returns io.EOF on a
 // clean END, or the *Status as error on a non-OK END / RST.
 func (s *Stream) Recv(msg proto.Message) error {
+	// Prefer any already-buffered frame so half-close never preempts pending MSGs.
 	select {
-	case f, ok := <-s.recvCh:
-		if !ok {
-			return io.EOF
-		}
-		switch f.Kind {
-		case transport.Kind_KIND_MSG:
-			return proto.Unmarshal(f.Payload, msg)
-		case transport.Kind_KIND_END:
-			s.applyEnd(f)
-			if s.endSt != nil && s.endSt.Code != codes.OK {
-				return s.endSt
-			}
-			return io.EOF
-		case transport.Kind_KIND_RST:
-			s.applyEnd(f)
-			if s.endSt == nil {
-				s.endSt = &Status{Code: codes.Canceled, Message: "stream reset"}
-			}
-			return s.endSt
-		default:
-			return io.EOF
-		}
+	case f := <-s.recvCh:
+		return s.handleRecv(f, msg)
+	default:
+	}
+	select {
+	case f := <-s.recvCh:
+		return s.handleRecv(f, msg)
+	case <-s.halfClosed:
+		return io.EOF
 	case <-s.ctx.Done():
 		return s.ctx.Err()
+	}
+}
+
+func (s *Stream) handleRecv(f *transport.Frame, msg proto.Message) error {
+	switch f.Kind {
+	case transport.Kind_KIND_MSG:
+		return proto.Unmarshal(f.Payload, msg)
+	case transport.Kind_KIND_END:
+		st := s.applyEnd(f)
+		if st.Code != codes.OK {
+			return st
+		}
+		return io.EOF
+	case transport.Kind_KIND_RST:
+		st := s.applyEnd(f)
+		if st.Code == codes.OK {
+			st = &Status{Code: codes.Canceled, Message: "stream reset"}
+		}
+		return st
+	default:
+		return io.EOF
 	}
 }
 
@@ -120,11 +135,23 @@ func (s *Stream) end(st *Status, trailers map[string]string) error {
 	return s.mux.write(s.ctx, f)
 }
 
-func (s *Stream) applyEnd(f *transport.Frame) {
+func (s *Stream) applyEnd(f *transport.Frame) *Status {
+	st := statusFromProto(f.Status)
+	s.mu.Lock()
 	if f.Headers != nil {
 		s.header = f.Headers
 	}
-	s.endSt = statusFromProto(f.Status)
+	s.endSt = st
+	s.mu.Unlock()
+	s.cancel()
+	return st
+}
+
+// failWith is called by mux.failAll to signal an error on the stream.
+func (s *Stream) failWith(err error) {
+	s.mu.Lock()
+	s.endSt = FromError(err)
+	s.mu.Unlock()
 	s.cancel()
 }
 
@@ -136,15 +163,10 @@ func (s *Stream) deliver(f *transport.Frame) {
 	}
 }
 
-// halfClose closes recvCh so a server-side Recv returns io.EOF.
+// halfClose signals the peer finished sending; a blocked Recv returns io.EOF
+// once recvCh is drained.
 func (s *Stream) halfClose() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.closed {
-		return
-	}
-	s.closed = true
-	close(s.recvCh)
+	s.halfCloseOne.Do(func() { close(s.halfClosed) })
 }
 
 func statusToProto(st *Status) *transport.Status {
