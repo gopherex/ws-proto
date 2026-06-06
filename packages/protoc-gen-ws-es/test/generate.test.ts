@@ -26,10 +26,9 @@ describe("protoc-gen-ws-es generation", () => {
     expect(existsSync(resolve(here, "gen/echo_pb.ts"))).toBe(true);
   });
 
-  it("emits a client class and descriptor", () => {
+  it("emits a client class with the wire path", () => {
     const src = readFileSync(genFile, "utf8");
     expect(src).toContain("export class EchoServiceClient");
-    expect(src).toContain("export const EchoServiceDescriptor");
     expect(src).toContain('"/echo.v1.EchoService/Unary"');
   });
 

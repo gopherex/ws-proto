@@ -31,6 +31,12 @@ export interface ClientStream {
    * via RST so the stream detaches and the server stops producing.
    */
   [Symbol.asyncIterator](): AsyncIterator<Uint8Array>;
+  /**
+   * cancel aborts the RPC from the client: sends RST, detaches the stream from
+   * the mux, and ends pending recv()/iteration. Safe to call after completion
+   * (no-op). Use it to abort a streaming call whose request source failed.
+   */
+  cancel(): void;
 }
 
 /** Callbacks the mux supplies so the stream can write frames and detach itself. */
