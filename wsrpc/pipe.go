@@ -47,6 +47,8 @@ func (p *pipeConn) ReadFrame(ctx context.Context) (*transport.Frame, error) {
 	}
 }
 
+func (p *pipeConn) Ping(ctx context.Context) error { return nil }
+
 func (p *pipeConn) Close() error {
 	select {
 	case <-p.done:

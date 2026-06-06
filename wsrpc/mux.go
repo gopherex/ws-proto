@@ -4,6 +4,7 @@ import (
 	"context"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/gopherex/ws-proto/transport"
 )
@@ -37,6 +38,34 @@ func newMux(ctx context.Context, conn frameConn, onOpen func(*Stream)) *Mux {
 	}
 	go m.readLoop()
 	return m
+}
+
+// startKeepalive launches a goroutine that pings the peer every interval,
+// failing the mux if a pong is not received within timeout. interval<=0
+// disables pinging. Must run concurrently with readLoop, which supplies the
+// pong reads that coder/websocket Ping awaits.
+func (m *Mux) startKeepalive(interval, timeout time.Duration) {
+	if interval <= 0 {
+		return
+	}
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-m.ctx.Done():
+				return
+			case <-ticker.C:
+				ctx, cancel := context.WithTimeout(m.ctx, timeout)
+				err := m.conn.Ping(ctx)
+				cancel()
+				if err != nil {
+					m.cancel()
+					return
+				}
+			}
+		}
+	}()
 }
 
 func (m *Mux) write(ctx context.Context, f *transport.Frame) error {
