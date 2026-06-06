@@ -1,0 +1,21 @@
+# Golden TypeScript generation pipeline for the example proto.
+#
+# Go generation for the example is owned by Plan 2 (example/easyp.yaml:
+# protoc-gen-go + protoc-gen-go-ws). This file drives the TypeScript half:
+# protoc-gen-es (message types) THEN protoc-gen-ws-es (WebSocket clients),
+# in dependency order, emitting siblings that interoperate.
+version: v2
+inputs:
+  - directory: example/proto
+plugins:
+  # --- TypeScript ---
+  - local: ./node_modules/.bin/protoc-gen-es
+    out: packages/protoc-gen-ws-es/test/gen
+    opt:
+      - target=ts
+      - import_extension=js
+  - local: ./packages/protoc-gen-ws-es/bin/protoc-gen-ws-es.js
+    out: packages/protoc-gen-ws-es/test/gen
+    opt:
+      - target=ts
+      - import_extension=js
