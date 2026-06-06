@@ -14,11 +14,11 @@ func (g *Generator) genService(gf *protogen.GeneratedFile, svc *protogen.Service
 		case kindUnary:
 			gf.P("\t", m.GoName, "(ctx ", ctx, ", req *", req, ") (*", res, ", error)")
 		case kindServerStream:
-			gf.P("\t", m.GoName, "(ctx ", ctx, ", req *", req, ", stream *", svc.GoName, "_", m.GoName, "Server) error")
+			gf.P("\t", m.GoName, "(ctx ", ctx, ", req *", req, ", stream *", serverWrapperName(svc, m), ") error")
 		case kindClientStream:
-			gf.P("\t", m.GoName, "(ctx ", ctx, ", stream *", svc.GoName, "_", m.GoName, "Server) (*", res, ", error)")
+			gf.P("\t", m.GoName, "(ctx ", ctx, ", stream *", serverWrapperName(svc, m), ") (*", res, ", error)")
 		case kindBidi:
-			gf.P("\t", m.GoName, "(ctx ", ctx, ", stream *", svc.GoName, "_", m.GoName, "Server) error")
+			gf.P("\t", m.GoName, "(ctx ", ctx, ", stream *", serverWrapperName(svc, m), ") error")
 		}
 	}
 	gf.P("}")
@@ -39,7 +39,7 @@ func (g *Generator) genService(gf *protogen.GeneratedFile, svc *protogen.Service
 // genServerStreamWrapper emits <Svc>_<Method>Server wrapping *wsrpc.Stream with
 // typed Send/Recv. Recv decodes a request message; Send encodes a response.
 func (g *Generator) genServerStreamWrapper(gf *protogen.GeneratedFile, svc *protogen.Service, m *protogen.Method) {
-	name := svc.GoName + "_" + m.GoName + "Server"
+	name := serverWrapperName(svc, m)
 	req := gf.QualifiedGoIdent(m.Input.GoIdent)
 	res := gf.QualifiedGoIdent(m.Output.GoIdent)
 	stream := gf.QualifiedGoIdent(wsrpcImport.Ident("Stream"))
@@ -86,7 +86,7 @@ func (g *Generator) genRegistrar(gf *protogen.GeneratedFile, svc *protogen.Servi
 	gf.P("func Register", svc.GoName, "Handler(srv *", srvType, ", impl ", svc.GoName, "Handler) {")
 	for _, m := range svc.Methods {
 		route := methodRoute(svc, m)
-		wrapper := svc.GoName + "_" + m.GoName + "Server"
+		wrapper := serverWrapperName(svc, m)
 		req := gf.QualifiedGoIdent(m.Input.GoIdent)
 		gf.P("\tsrv.Register(", strconvQuote(route), ", func(ctx ", ctx, ", s *", streamType, ") error {")
 		switch methodKind(m) {

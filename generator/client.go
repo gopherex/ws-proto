@@ -7,8 +7,9 @@ func (g *Generator) genClient(gf *protogen.GeneratedFile, svc *protogen.Service)
 	ccType := gf.QualifiedGoIdent(wsrpcImport.Ident("ClientConn"))
 
 	// --- client interface ---
-	gf.P("// ", svc.GoName, "Client is the client API for the ", svc.GoName, " service.")
-	gf.P("type ", svc.GoName, "Client interface {")
+	iface := clientIfaceName(svc)
+	gf.P("// ", iface, " is the client API for the ", svc.GoName, " service.")
+	gf.P("type ", iface, " interface {")
 	for _, m := range svc.Methods {
 		req := gf.QualifiedGoIdent(m.Input.GoIdent)
 		res := gf.QualifiedGoIdent(m.Output.GoIdent)
@@ -16,22 +17,22 @@ func (g *Generator) genClient(gf *protogen.GeneratedFile, svc *protogen.Service)
 		case kindUnary:
 			gf.P("\t", m.GoName, "(ctx ", ctx, ", req *", req, ") (*", res, ", error)")
 		case kindServerStream:
-			gf.P("\t", m.GoName, "(ctx ", ctx, ", req *", req, ") (*", svc.GoName, "_", m.GoName, "Client, error)")
+			gf.P("\t", m.GoName, "(ctx ", ctx, ", req *", req, ") (*", clientWrapperName(svc, m), ", error)")
 		case kindClientStream, kindBidi:
-			gf.P("\t", m.GoName, "(ctx ", ctx, ") (*", svc.GoName, "_", m.GoName, "Client, error)")
+			gf.P("\t", m.GoName, "(ctx ", ctx, ") (*", clientWrapperName(svc, m), ", error)")
 		}
 	}
 	gf.P("}")
 	gf.P()
 
 	// --- impl struct + ctor ---
-	impl := unexport(svc.GoName) + "Client"
+	impl := clientImplName(svc)
 	gf.P("type ", impl, " struct {")
 	gf.P("\tcc *", ccType)
 	gf.P("}")
 	gf.P()
-	gf.P("// New", svc.GoName, "Client returns a ", svc.GoName, "Client backed by cc.")
-	gf.P("func New", svc.GoName, "Client(cc *", ccType, ") ", svc.GoName, "Client {")
+	gf.P("// ", clientCtorName(svc), " returns a ", iface, " backed by cc.")
+	gf.P("func ", clientCtorName(svc), "(cc *", ccType, ") ", iface, " {")
 	gf.P("\treturn &", impl, "{cc: cc}")
 	gf.P("}")
 	gf.P()
@@ -53,7 +54,7 @@ func (g *Generator) genClient(gf *protogen.GeneratedFile, svc *protogen.Service)
 // genClientStreamWrapper emits <Svc>_<Method>Client wrapping *wsrpc.Stream.
 // Send encodes a request; Recv decodes a response; CloseSend forwards.
 func (g *Generator) genClientStreamWrapper(gf *protogen.GeneratedFile, svc *protogen.Service, m *protogen.Method) {
-	name := svc.GoName + "_" + m.GoName + "Client"
+	name := clientWrapperName(svc, m)
 	req := gf.QualifiedGoIdent(m.Input.GoIdent)
 	res := gf.QualifiedGoIdent(m.Output.GoIdent)
 	stream := gf.QualifiedGoIdent(wsrpcImport.Ident("Stream"))
@@ -102,7 +103,7 @@ func (g *Generator) genClientMethod(gf *protogen.GeneratedFile, svc *protogen.Se
 	req := gf.QualifiedGoIdent(m.Input.GoIdent)
 	res := gf.QualifiedGoIdent(m.Output.GoIdent)
 	route := methodRoute(svc, m)
-	wrapper := svc.GoName + "_" + m.GoName + "Client"
+	wrapper := clientWrapperName(svc, m)
 
 	switch methodKind(m) {
 	case kindUnary:

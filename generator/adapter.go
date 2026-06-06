@@ -36,7 +36,7 @@ func (g *Generator) genBridgeMethod(gf *protogen.GeneratedFile, svc *protogen.Se
 	ctx := gf.QualifiedGoIdent(contextImport.Ident("Context"))
 	req := gf.QualifiedGoIdent(m.Input.GoIdent)
 	res := gf.QualifiedGoIdent(m.Output.GoIdent)
-	wrapper := svc.GoName + "_" + m.GoName + "Server"
+	wrapper := serverWrapperName(svc, m)
 	shim := unexport(svc.GoName) + m.GoName + "GRPCShim"
 
 	switch methodKind(m) {
