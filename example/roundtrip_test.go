@@ -5,12 +5,15 @@ import (
 	"io"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	echov1 "github.com/gopherex/ws-proto/example/proto/echo/v1"
 	"github.com/gopherex/ws-proto/wsrpc"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // impl is a hand-written EchoServiceHandler.
@@ -231,4 +234,136 @@ func TestBridgeBidi(t *testing.T) {
 	require.NoError(t, stream.CloseSend())
 	_, err = stream.Recv()
 	require.Equal(t, io.EOF, err)
+}
+
+// recorder collects FullMethod values observed by interceptors, guarded for -race.
+type recorder struct {
+	mu     sync.Mutex
+	unary  []string
+	stream []string
+}
+
+func (r *recorder) addUnary(m string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.unary = append(r.unary, m)
+}
+
+func (r *recorder) addStream(m string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.stream = append(r.stream, m)
+}
+
+func (r *recorder) snapshot() (unary, stream []string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.unary...), append([]string(nil), r.stream...)
+}
+
+// dialGRPCOpts serves grpcImpl through the bridge with the given options.
+func dialGRPCOpts(t *testing.T, opts ...wsrpc.BridgeOption) echov1.EchoServiceWSClient {
+	t.Helper()
+	srv := wsrpc.NewServer()
+	echov1.RegisterEchoServiceHandler(srv, echov1.EchoServiceFromGRPC(grpcImpl{}, opts...))
+
+	hs := httptest.NewServer(srv)
+	t.Cleanup(hs.Close)
+	wsURL := "ws" + strings.TrimPrefix(hs.URL, "http")
+
+	cc, err := wsrpc.Dial(context.Background(), wsURL)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = cc.Close() })
+	return echov1.NewEchoServiceWSClient(cc)
+}
+
+func TestBridgeUnaryInterceptor(t *testing.T) {
+	rec := &recorder{}
+	recU := func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+		rec.addUnary(info.FullMethod)
+		return handler(ctx, req)
+	}
+	client := dialGRPCOpts(t, wsrpc.WithUnaryInterceptor(recU))
+
+	res, err := client.Unary(context.Background(), &echov1.UnaryRequest{Name: "x"})
+	require.NoError(t, err)
+	require.Equal(t, "grpc x", res.Greeting)
+
+	unary, _ := rec.snapshot()
+	require.Equal(t, []string{"/echo.v1.EchoService/Unary"}, unary)
+}
+
+func TestBridgeStreamInterceptorAllKinds(t *testing.T) {
+	rec := &recorder{}
+	recS := func(srv any, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+		rec.addStream(info.FullMethod)
+		return handler(srv, ss)
+	}
+	client := dialGRPCOpts(t, wsrpc.WithStreamInterceptor(recS))
+
+	// server-stream
+	ss, err := client.ServerStream(context.Background(), &echov1.ServerStreamRequest{Count: 2})
+	require.NoError(t, err)
+	var got []int32
+	for {
+		res, err := ss.Recv()
+		if err == io.EOF {
+			break
+		}
+		require.NoError(t, err)
+		got = append(got, res.Index)
+	}
+	require.Equal(t, []int32{0, 1}, got)
+
+	// client-stream
+	cs, err := client.ClientStream(context.Background())
+	require.NoError(t, err)
+	for i := int32(1); i <= 3; i++ {
+		require.NoError(t, cs.Send(&echov1.ClientStreamRequest{Value: i}))
+	}
+	cres, err := cs.CloseAndRecv()
+	require.NoError(t, err)
+	require.Equal(t, int32(6), cres.Sum)
+
+	// bidi
+	bs, err := client.Bidi(context.Background())
+	require.NoError(t, err)
+	require.NoError(t, bs.Send(&echov1.BidiRequest{Text: "p"}))
+	r1, err := bs.Recv()
+	require.NoError(t, err)
+	require.Equal(t, "gecho:p", r1.Echo)
+	require.NoError(t, bs.CloseSend())
+	_, err = bs.Recv()
+	require.Equal(t, io.EOF, err)
+
+	_, stream := rec.snapshot()
+	require.ElementsMatch(t, []string{
+		"/echo.v1.EchoService/ServerStream",
+		"/echo.v1.EchoService/ClientStream",
+		"/echo.v1.EchoService/Bidi",
+	}, stream)
+}
+
+func TestBridgeStreamInterceptorShortCircuits(t *testing.T) {
+	denyS := func(srv any, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+		return status.Error(codes.PermissionDenied, "denied")
+	}
+	client := dialGRPCOpts(t, wsrpc.WithStreamInterceptor(denyS))
+
+	ss, err := client.ServerStream(context.Background(), &echov1.ServerStreamRequest{Count: 3})
+	require.NoError(t, err)
+	_, err = ss.Recv()
+	require.Error(t, err)
+	require.Equal(t, codes.PermissionDenied, status.Code(err))
+}
+
+func TestBridgeUnaryInterceptorShortCircuits(t *testing.T) {
+	denyU := func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+		return nil, status.Error(codes.PermissionDenied, "denied")
+	}
+	client := dialGRPCOpts(t, wsrpc.WithUnaryInterceptor(denyU))
+
+	_, err := client.Unary(context.Background(), &echov1.UnaryRequest{Name: "x"})
+	require.Error(t, err)
+	require.Equal(t, codes.PermissionDenied, status.Code(err))
 }

@@ -6,6 +6,7 @@ package echov1
 import (
 	context "context"
 	wsrpc "github.com/gopherex/ws-proto/wsrpc"
+	grpc "google.golang.org/grpc"
 	codes "google.golang.org/grpc/codes"
 	metadata "google.golang.org/grpc/metadata"
 	proto "google.golang.org/protobuf/proto"
@@ -256,161 +257,109 @@ func (c *echoServiceWSClient) Bidi(ctx context.Context) (*EchoService_BidiClient
 // echoServiceGRPCBridge adapts a gRPC EchoServiceServer to a EchoServiceHandler.
 type echoServiceGRPCBridge struct {
 	impl EchoServiceServer
+	cfg  wsrpc.BridgeConfig
 }
 
 // EchoServiceFromGRPC wraps a protoc-gen-go-grpc server so it can be
-// registered on a wsrpc.Server via RegisterEchoServiceHandler.
-func EchoServiceFromGRPC(impl EchoServiceServer) EchoServiceHandler {
-	return &echoServiceGRPCBridge{impl: impl}
+// registered on a wsrpc.Server via RegisterEchoServiceHandler. Optional
+// wsrpc.BridgeOption values install gRPC server interceptors run around RPCs.
+func EchoServiceFromGRPC(impl EchoServiceServer, opts ...wsrpc.BridgeOption) EchoServiceHandler {
+	return &echoServiceGRPCBridge{impl: impl, cfg: wsrpc.ApplyBridgeOptions(opts...)}
+}
+
+// echoServiceGRPCStream adapts *wsrpc.Stream to grpc.ServerStream. When capturing is set
+// (client-streaming), SendMsg captures the response instead of sending it, so
+// the bridge can return it through the wsrpc handler contract.
+type echoServiceGRPCStream struct {
+	stream    *wsrpc.Stream
+	ctx       context.Context
+	capturing bool
+	captured  proto.Message
+}
+
+func (x *echoServiceGRPCStream) Context() context.Context { return x.ctx }
+
+func (x *echoServiceGRPCStream) SetHeader(metadata.MD) error { return nil }
+
+func (x *echoServiceGRPCStream) SendHeader(metadata.MD) error { return nil }
+
+func (x *echoServiceGRPCStream) SetTrailer(metadata.MD) {}
+
+func (x *echoServiceGRPCStream) SendMsg(m any) error {
+	pm, ok := m.(proto.Message)
+	if !ok {
+		return wsrpc.Errorf(codes.Internal, "wsrpc: SendMsg expected proto.Message")
+	}
+	if x.capturing {
+		x.captured = pm
+		return nil
+	}
+	return x.stream.Send(pm)
+}
+
+func (x *echoServiceGRPCStream) RecvMsg(m any) error {
+	pm, ok := m.(proto.Message)
+	if !ok {
+		return wsrpc.Errorf(codes.Internal, "wsrpc: RecvMsg expected proto.Message")
+	}
+	return x.stream.Recv(pm)
 }
 
 func (b *echoServiceGRPCBridge) Unary(ctx context.Context, req *UnaryRequest) (*UnaryResponse, error) {
-	return b.impl.Unary(ctx, req)
+	if b.cfg.Unary == nil {
+		return b.impl.Unary(ctx, req)
+	}
+	info := &grpc.UnaryServerInfo{Server: b.impl, FullMethod: "/echo.v1.EchoService/Unary"}
+	resp, err := b.cfg.Unary(ctx, req, info, func(ctx context.Context, r any) (any, error) {
+		return b.impl.Unary(ctx, r.(*UnaryRequest))
+	})
+	if err != nil {
+		return nil, err
+	}
+	return resp.(*UnaryResponse), nil
 }
 
 func (b *echoServiceGRPCBridge) ServerStream(ctx context.Context, req *ServerStreamRequest, stream *EchoService_ServerStreamServerWS) error {
-	return b.impl.ServerStream(req, &echoServiceServerStreamGRPCShim{stream: stream.stream, ctx: ctx})
+	base := &echoServiceGRPCStream{stream: stream.stream, ctx: ctx}
+	h := func(_ any, ss grpc.ServerStream) error {
+		return b.impl.ServerStream(req, &grpc.GenericServerStream[ServerStreamRequest, ServerStreamResponse]{ServerStream: ss})
+	}
+	if b.cfg.Stream == nil {
+		return h(b.impl, base)
+	}
+	info := &grpc.StreamServerInfo{FullMethod: "/echo.v1.EchoService/ServerStream", IsServerStream: true}
+	return b.cfg.Stream(b.impl, base, info, h)
 }
 
 func (b *echoServiceGRPCBridge) ClientStream(ctx context.Context, stream *EchoService_ClientStreamServerWS) (*ClientStreamResponse, error) {
-	sh := &echoServiceClientStreamGRPCShim{stream: stream.stream, ctx: ctx}
-	if err := b.impl.ClientStream(sh); err != nil {
+	base := &echoServiceGRPCStream{stream: stream.stream, ctx: ctx, capturing: true}
+	h := func(_ any, ss grpc.ServerStream) error {
+		return b.impl.ClientStream(&grpc.GenericServerStream[ClientStreamRequest, ClientStreamResponse]{ServerStream: ss})
+	}
+	var err error
+	if b.cfg.Stream == nil {
+		err = h(b.impl, base)
+	} else {
+		info := &grpc.StreamServerInfo{FullMethod: "/echo.v1.EchoService/ClientStream", IsClientStream: true}
+		err = b.cfg.Stream(b.impl, base, info, h)
+	}
+	if err != nil {
 		return nil, err
 	}
-	if sh.resp == nil {
+	if base.captured == nil {
 		return nil, wsrpc.Errorf(codes.Internal, "wsrpc: EchoService.ClientStream handler returned without SendAndClose")
 	}
-	return sh.resp, nil
+	return base.captured.(*ClientStreamResponse), nil
 }
 
 func (b *echoServiceGRPCBridge) Bidi(ctx context.Context, stream *EchoService_BidiServerWS) error {
-	return b.impl.Bidi(&echoServiceBidiGRPCShim{stream: stream.stream, ctx: ctx})
-}
-
-// echoServiceServerStreamGRPCShim adapts *wsrpc.Stream to the gRPC server stream for EchoService.ServerStream.
-type echoServiceServerStreamGRPCShim struct {
-	stream *wsrpc.Stream
-	ctx    context.Context
-}
-
-func (x *echoServiceServerStreamGRPCShim) Send(msg *ServerStreamResponse) error {
-	return x.stream.Send(msg)
-}
-
-func (x *echoServiceServerStreamGRPCShim) Recv() (*ServerStreamRequest, error) {
-	msg := new(ServerStreamRequest)
-	if err := x.stream.Recv(msg); err != nil {
-		return nil, err
+	base := &echoServiceGRPCStream{stream: stream.stream, ctx: ctx}
+	h := func(_ any, ss grpc.ServerStream) error {
+		return b.impl.Bidi(&grpc.GenericServerStream[BidiRequest, BidiResponse]{ServerStream: ss})
 	}
-	return msg, nil
-}
-
-func (x *echoServiceServerStreamGRPCShim) Context() context.Context { return x.ctx }
-
-func (x *echoServiceServerStreamGRPCShim) SetHeader(metadata.MD) error { return nil }
-
-func (x *echoServiceServerStreamGRPCShim) SendHeader(metadata.MD) error { return nil }
-
-func (x *echoServiceServerStreamGRPCShim) SetTrailer(metadata.MD) {}
-
-func (x *echoServiceServerStreamGRPCShim) SendMsg(m any) error {
-	pm, ok := m.(proto.Message)
-	if !ok {
-		return wsrpc.Errorf(codes.Unimplemented, "wsrpc: SendMsg expected proto.Message")
+	if b.cfg.Stream == nil {
+		return h(b.impl, base)
 	}
-	return x.stream.Send(pm)
-}
-
-func (x *echoServiceServerStreamGRPCShim) RecvMsg(m any) error {
-	pm, ok := m.(proto.Message)
-	if !ok {
-		return wsrpc.Errorf(codes.Unimplemented, "wsrpc: RecvMsg expected proto.Message")
-	}
-	return x.stream.Recv(pm)
-}
-
-// echoServiceClientStreamGRPCShim adapts *wsrpc.Stream to the gRPC server stream for EchoService.ClientStream.
-type echoServiceClientStreamGRPCShim struct {
-	stream *wsrpc.Stream
-	ctx    context.Context
-	resp   *ClientStreamResponse // captured by SendAndClose
-}
-
-func (x *echoServiceClientStreamGRPCShim) Recv() (*ClientStreamRequest, error) {
-	msg := new(ClientStreamRequest)
-	if err := x.stream.Recv(msg); err != nil {
-		return nil, err
-	}
-	return msg, nil
-}
-
-func (x *echoServiceClientStreamGRPCShim) SendAndClose(msg *ClientStreamResponse) error {
-	x.resp = msg
-	return nil
-}
-
-func (x *echoServiceClientStreamGRPCShim) Context() context.Context { return x.ctx }
-
-func (x *echoServiceClientStreamGRPCShim) SetHeader(metadata.MD) error { return nil }
-
-func (x *echoServiceClientStreamGRPCShim) SendHeader(metadata.MD) error { return nil }
-
-func (x *echoServiceClientStreamGRPCShim) SetTrailer(metadata.MD) {}
-
-func (x *echoServiceClientStreamGRPCShim) SendMsg(m any) error {
-	pm, ok := m.(proto.Message)
-	if !ok {
-		return wsrpc.Errorf(codes.Unimplemented, "wsrpc: SendMsg expected proto.Message")
-	}
-	return x.stream.Send(pm)
-}
-
-func (x *echoServiceClientStreamGRPCShim) RecvMsg(m any) error {
-	pm, ok := m.(proto.Message)
-	if !ok {
-		return wsrpc.Errorf(codes.Unimplemented, "wsrpc: RecvMsg expected proto.Message")
-	}
-	return x.stream.Recv(pm)
-}
-
-// echoServiceBidiGRPCShim adapts *wsrpc.Stream to the gRPC server stream for EchoService.Bidi.
-type echoServiceBidiGRPCShim struct {
-	stream *wsrpc.Stream
-	ctx    context.Context
-}
-
-func (x *echoServiceBidiGRPCShim) Send(msg *BidiResponse) error {
-	return x.stream.Send(msg)
-}
-
-func (x *echoServiceBidiGRPCShim) Recv() (*BidiRequest, error) {
-	msg := new(BidiRequest)
-	if err := x.stream.Recv(msg); err != nil {
-		return nil, err
-	}
-	return msg, nil
-}
-
-func (x *echoServiceBidiGRPCShim) Context() context.Context { return x.ctx }
-
-func (x *echoServiceBidiGRPCShim) SetHeader(metadata.MD) error { return nil }
-
-func (x *echoServiceBidiGRPCShim) SendHeader(metadata.MD) error { return nil }
-
-func (x *echoServiceBidiGRPCShim) SetTrailer(metadata.MD) {}
-
-func (x *echoServiceBidiGRPCShim) SendMsg(m any) error {
-	pm, ok := m.(proto.Message)
-	if !ok {
-		return wsrpc.Errorf(codes.Unimplemented, "wsrpc: SendMsg expected proto.Message")
-	}
-	return x.stream.Send(pm)
-}
-
-func (x *echoServiceBidiGRPCShim) RecvMsg(m any) error {
-	pm, ok := m.(proto.Message)
-	if !ok {
-		return wsrpc.Errorf(codes.Unimplemented, "wsrpc: RecvMsg expected proto.Message")
-	}
-	return x.stream.Recv(pm)
+	info := &grpc.StreamServerInfo{FullMethod: "/echo.v1.EchoService/Bidi", IsClientStream: true, IsServerStream: true}
+	return b.cfg.Stream(b.impl, base, info, h)
 }
