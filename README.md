@@ -227,6 +227,41 @@ after the response stream completes cleanly.
 In Node, provide a `WebSocket` global (e.g. the [`ws`](https://www.npmjs.com/package/ws)
 package) before constructing the transport.
 
+### Auto-reconnect (opt-in)
+
+By default a connection is a single socket: if it drops, every in-flight RPC
+fails and the connection stays down. You can opt into automatic reconnection of
+the **connection** (with exponential backoff + jitter) on both runtimes:
+
+```go
+// Go: redial on connection loss. Backoff defaults to 100ms initial / 30s max.
+cc, err := wsrpc.Dial(ctx, "ws://localhost:8080/rpc", wsrpc.WithReconnect())
+// tune the schedule:
+cc, err = wsrpc.Dial(ctx, "ws://localhost:8080/rpc",
+    wsrpc.WithReconnect(wsrpc.WithBackoff(200*time.Millisecond, 10*time.Second)),
+)
+```
+
+```ts
+// TS: only WsTransport reconnects (it owns dialing); fromSocket() does not.
+const transport = new WsTransport("wss://api.example.com/rpc", {
+  reconnect: true,
+  backoff: { initialMs: 200, maxMs: 10_000 }, // optional; defaults 100ms / 30s
+});
+```
+
+**There is no stream resume.** When the connection drops, in-flight RPCs fail
+with **`codes.Unavailable`** (Go) / **`CODE_UNAVAILABLE` (14)** (TS) — message
+`"connection lost"` — and **the caller must retry** them; the server keeps no
+per-stream session state. New RPCs started after a drop wait for (or trigger) a
+reconnect and run on the fresh socket; RPCs opened during the gap buffer their
+frames and flush once the new socket opens. A deliberate `Close()` instead fails
+in-flight streams with `codes.Canceled` ("transport closed"), so an intentional
+shutdown stays distinguishable from a transport disconnect.
+
+Without `WithReconnect` / `{ reconnect: true }` the behavior is unchanged: a
+dropped connection fails everything with `Unavailable` and stays down.
+
 ---
 
 ## Middleware & gRPC interceptors (Go)
