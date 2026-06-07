@@ -7,6 +7,7 @@ export {
   CODE_CANCELLED,
   CODE_DEADLINE_EXCEEDED,
   CODE_RESOURCE_EXHAUSTED,
+  CODE_UNAVAILABLE,
 } from "./status.js";
 export { Kind } from "./frame.js";
 export type { Frame, Status } from "./frame.js";

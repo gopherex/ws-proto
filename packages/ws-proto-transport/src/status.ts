@@ -31,6 +31,12 @@ export const CODE_DEADLINE_EXCEEDED = 4;
  * is reset rather than letting the backlog grow unbounded.
  */
 export const CODE_RESOURCE_EXHAUSTED = 8;
+/**
+ * gRPC-style "UNAVAILABLE" status code. Surfaced on in-flight streams when the
+ * transport connection is lost (socket close/error). Callers are expected to
+ * retry; there is no stream resume.
+ */
+export const CODE_UNAVAILABLE = 14;
 
 /**
  * statusErrorFromProto converts a decoded END Status into a WsStatusError, or

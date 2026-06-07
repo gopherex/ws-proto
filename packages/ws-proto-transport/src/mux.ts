@@ -6,6 +6,7 @@ import {
   CODE_CANCELLED,
   CODE_DEADLINE_EXCEEDED,
   CODE_RESOURCE_EXHAUSTED,
+  CODE_UNAVAILABLE,
   abortError,
 } from "./status.js";
 
@@ -67,6 +68,8 @@ export class Mux {
   private readonly sendBuffer: Uint8Array[] = [];
   private open = false;
   private closed = false;
+  /** Fired once when the socket drops (not via close()); used to drive reconnect. */
+  private onDisconnect?: () => void;
 
   constructor(ws: WebSocketLike, maxReceiveQueue: number = DEFAULT_MAX_RECEIVE_QUEUE) {
     this.ws = ws;
@@ -83,8 +86,26 @@ export class Mux {
       this.flush();
     };
     this.ws.onmessage = (ev) => this.handleMessage(ev.data);
-    this.ws.onclose = () => this.failAll(new WsStatusError(CODE_CANCELLED, "websocket closed"));
-    this.ws.onerror = () => this.failAll(new WsStatusError(CODE_CANCELLED, "websocket error"));
+    // A socket close/error that is NOT a deliberate close() is a transport
+    // disconnect: in-flight streams fail with CODE_UNAVAILABLE ("connection
+    // lost") and any reconnect controller is notified to redial.
+    this.ws.onclose = () => this.onTransportDrop();
+    this.ws.onerror = () => this.onTransportDrop();
+  }
+
+  /** setOnDisconnect registers a one-shot callback fired when the socket drops. */
+  setOnDisconnect(fn: () => void): void {
+    this.onDisconnect = fn;
+  }
+
+  private onTransportDrop(): void {
+    if (this.closed) {
+      return; // deliberate close already failed streams with CANCELLED
+    }
+    this.failAll(new WsStatusError(CODE_UNAVAILABLE, "connection lost"));
+    const fn = this.onDisconnect;
+    this.onDisconnect = undefined; // fire at most once
+    fn?.();
   }
 
   /** openStream allocates an odd stream id, registers the stream, and sends OPEN. */
