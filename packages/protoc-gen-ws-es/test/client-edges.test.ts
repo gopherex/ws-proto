@@ -95,6 +95,29 @@ describe("generated client call options", () => {
     expect(trailers!["x-trailer"]).toBe("done");
   });
 
+  it("unary invokes onHeader with the leading response headers", async () => {
+    const sock = new FakeSocket();
+    const client = new EchoServiceClient(WsTransport.fromSocket(sock));
+    let header: Record<string, string> | undefined;
+    const p = client.unary(create(UnaryRequestSchema, { name: "x" }), {
+      onHeader: (h) => {
+        header = h;
+      },
+    });
+    await tick();
+    sock.inject({
+      streamId: 1,
+      kind: Kind.KIND_HEADER,
+      headers: { "x-lead": "hi" },
+    });
+    sock.inject({ streamId: 1, kind: Kind.KIND_MSG, payload: new Uint8Array() });
+    sock.inject({ streamId: 1, kind: Kind.KIND_END, status: { code: 0 } });
+    await p;
+    await tick();
+    expect(header).toBeDefined();
+    expect(header!["x-lead"]).toBe("hi");
+  });
+
   it("unary sends request metadata via options.headers", async () => {
     const sock = new FakeSocket();
     const client = new EchoServiceClient(WsTransport.fromSocket(sock));

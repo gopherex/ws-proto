@@ -36,6 +36,8 @@ function printCallOptions(f: GeneratedFile): void {
   f.print("  signal?: AbortSignal;");
   f.print("  /** Per-call deadline in milliseconds; propagated to the server and aborts locally on expiry. */");
   f.print("  timeoutMs?: number;");
+  f.print("  /** Invoked with the optional leading response headers (KIND_HEADER) sent before the first message. */");
+  f.print("  onHeader?: (header: Record<string, string>) => void;");
   f.print("  /** Invoked with the response trailers once the server ends the stream. */");
   f.print("  onTrailer?: (trailer: Record<string, string>) => void;");
   f.print("}");
@@ -93,6 +95,7 @@ function printUnary(
   f.print(f.jsDoc(method, "  "));
   f.print("  async ", method.localName, "(req: ", inT, ", options?: CallOptions): Promise<", outT, "> {");
   f.print("    const stream = this.transport.openStream(", f.string(wirePath(service, method)), ", { headers: options?.headers, signal: options?.signal, timeoutMs: options?.timeoutMs });");
+    f.print("    if (options?.onHeader) { void stream.responseLeadingHeaders().then((h) => options.onHeader!(h)); }");
   f.print("    stream.send(", toBinary, "(", inSchema, ", req));");
   f.print("    stream.closeSend();");
   f.print("    const bytes = await stream.recv();");
@@ -119,6 +122,7 @@ function printServerStreaming(
   f.print(f.jsDoc(method, "  "));
   f.print("  async *", method.localName, "(req: ", inT, ", options?: CallOptions): AsyncIterable<", outT, "> {");
   f.print("    const stream = this.transport.openStream(", f.string(wirePath(service, method)), ", { headers: options?.headers, signal: options?.signal, timeoutMs: options?.timeoutMs });");
+    f.print("    if (options?.onHeader) { void stream.responseLeadingHeaders().then((h) => options.onHeader!(h)); }");
   f.print("    stream.send(", toBinary, "(", inSchema, ", req));");
   f.print("    stream.closeSend();");
   f.print("    for await (const bytes of stream) {");
@@ -142,6 +146,7 @@ function printClientStreaming(
   f.print(f.jsDoc(method, "  "));
   f.print("  async ", method.localName, "(reqs: AsyncIterable<", inT, ">, options?: CallOptions): Promise<", outT, "> {");
   f.print("    const stream = this.transport.openStream(", f.string(wirePath(service, method)), ", { headers: options?.headers, signal: options?.signal, timeoutMs: options?.timeoutMs });");
+    f.print("    if (options?.onHeader) { void stream.responseLeadingHeaders().then((h) => options.onHeader!(h)); }");
   f.print("    try {");
   f.print("      for await (const req of reqs) {");
   f.print("        stream.send(", toBinary, "(", inSchema, ", req));");
@@ -175,6 +180,7 @@ function printBidiStreaming(
   f.print(f.jsDoc(method, "  "));
   f.print("  async *", method.localName, "(reqs: AsyncIterable<", inT, ">, options?: CallOptions): AsyncIterable<", outT, "> {");
   f.print("    const stream = this.transport.openStream(", f.string(wirePath(service, method)), ", { headers: options?.headers, signal: options?.signal, timeoutMs: options?.timeoutMs });");
+    f.print("    if (options?.onHeader) { void stream.responseLeadingHeaders().then((h) => options.onHeader!(h)); }");
   // Pump request messages concurrently so the read loop below can interleave.
   // On pump failure cancel the stream: that ends the read loop promptly (no
   // hang) and we re-raise the captured error after the loop unwinds.
