@@ -1,6 +1,6 @@
 {
   "name": "@gopherex/ws-proto-transport",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "WebSocket multiplexing transport for protobuf RPC services (analog of connect-web transport).",
   "type": "module",
   "license": "MIT",
