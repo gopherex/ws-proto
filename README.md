@@ -345,11 +345,13 @@ The bridge mirrors grpc-go's own handler/interceptor flow (a generic
 works as in a normal gRPC server. **Streaming response metadata** set on the
 `grpc.ServerStream` via `SetHeader`/`SendHeader`/`SetTrailer` **is** propagated:
 leading headers become a `KIND_HEADER` frame and trailers ride the `END` frame.
-**Limitations:** unary interceptor header metadata set via
-`grpc.SetHeader`/`SendHeader` (which reads from `ctx`, with no `ServerStream` on
-the unary path) is still not propagated, and a stream interceptor that wraps the
-`ServerStream` must delegate `SendMsg`/`RecvMsg` to the embedded stream (the
-idiomatic pattern).
+**Unary response metadata** set via `grpc.SetHeader`/`SendHeader`/`SetTrailer`
+**is** propagated too: the unary path has no `ServerStream`, so the bridge
+installs a `grpc.ServerTransportStream` that forwards into a per-call metadata
+sink the generated registrar flushes after the handler returns (native unary
+handlers can set the same via `wsrpc.SetHeader`/`wsrpc.SetTrailer`).
+**Limitation:** a stream interceptor that wraps the `ServerStream` must delegate
+`SendMsg`/`RecvMsg` to the embedded stream (the idiomatic pattern).
 
 ---
 

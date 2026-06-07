@@ -92,14 +92,23 @@ func (g *Generator) genRegistrar(gf *protogen.GeneratedFile, svc *protogen.Servi
 		switch methodKind(m) {
 		case kindUnary:
 			// Decode the single request, dispatch, send the single response.
+			// Install a unary metadata sink so the handler (or a gRPC bridge
+			// interceptor) can set leading-header/trailer response metadata via
+			// wsrpc.SetHeader/SetTrailer; flush it onto the stream after return.
+			withUnaryMD := gf.QualifiedGoIdent(wsrpcImport.Ident("WithUnaryMetadata"))
 			gf.P("\t\treq := new(", req, ")")
 			gf.P("\t\tif err := s.Recv(req); err != nil && err != ", ioEOF, " {")
 			gf.P("\t\t\treturn err")
 			gf.P("\t\t}")
+			gf.P("\t\tctx, umd := ", withUnaryMD, "(ctx)")
 			gf.P("\t\tres, err := impl.", m.GoName, "(ctx, req)")
 			gf.P("\t\tif err != nil {")
 			gf.P("\t\t\treturn err")
 			gf.P("\t\t}")
+			gf.P("\t\tif h := umd.Header(); h != nil {")
+			gf.P("\t\t\t_ = s.SendHeader(h)")
+			gf.P("\t\t}")
+			gf.P("\t\ts.SetTrailer(umd.Trailer())")
 			gf.P("\t\treturn s.Send(res)")
 		case kindServerStream:
 			gf.P("\t\treq := new(", req, ")")

@@ -91,10 +91,15 @@ func RegisterEchoServiceHandler(srv *wsrpc.Server, impl EchoServiceHandler) {
 		if err := s.Recv(req); err != nil && err != io.EOF {
 			return err
 		}
+		ctx, umd := wsrpc.WithUnaryMetadata(ctx)
 		res, err := impl.Unary(ctx, req)
 		if err != nil {
 			return err
 		}
+		if h := umd.Header(); h != nil {
+			_ = s.SendHeader(h)
+		}
+		s.SetTrailer(umd.Trailer())
 		return s.Send(res)
 	})
 	srv.Register("/echo.v1.EchoService/ServerStream", func(ctx context.Context, s *wsrpc.Stream) error {
@@ -372,6 +377,7 @@ func (b *echoServiceGRPCBridge) Unary(ctx context.Context, req *UnaryRequest) (*
 	if b.cfg.Unary == nil {
 		return b.impl.Unary(ctx, req)
 	}
+	ctx = grpc.NewContextWithServerTransportStream(ctx, wsrpc.UnaryServerTransportStream(ctx, "/echo.v1.EchoService/Unary"))
 	info := &grpc.UnaryServerInfo{Server: b.impl, FullMethod: "/echo.v1.EchoService/Unary"}
 	resp, err := b.cfg.Unary(ctx, req, info, func(ctx context.Context, r any) (any, error) {
 		return b.impl.Unary(ctx, r.(*UnaryRequest))

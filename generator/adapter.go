@@ -145,10 +145,16 @@ func (g *Generator) genBridgeMethod(gf *protogen.GeneratedFile, svc *protogen.Se
 
 	switch methodKind(m) {
 	case kindUnary:
+		newCtxWithTS := gf.QualifiedGoIdent(grpcImport.Ident("NewContextWithServerTransportStream"))
+		unaryTS := gf.QualifiedGoIdent(wsrpcImport.Ident("UnaryServerTransportStream"))
 		gf.P("func (b *", bridge, ") ", m.GoName, "(ctx ", ctx, ", req *", req, ") (*", res, ", error) {")
 		gf.P("\tif b.cfg.Unary == nil {")
 		gf.P("\t\treturn b.impl.", m.GoName, "(ctx, req)")
 		gf.P("\t}")
+		// Install a grpc.ServerTransportStream forwarding into the unary metadata
+		// sink already on ctx (installed by the registrar) so an interceptor's
+		// grpc.SetHeader/grpc.SetTrailer is captured and propagated.
+		gf.P("\tctx = ", newCtxWithTS, "(ctx, ", unaryTS, "(ctx, ", route, "))")
 		gf.P("\tinfo := &", unaryInfo, "{Server: b.impl, FullMethod: ", route, "}")
 		gf.P("\tresp, err := b.cfg.Unary(ctx, req, info, func(ctx ", ctx, ", r any) (any, error) {")
 		gf.P("\t\treturn b.impl.", m.GoName, "(ctx, r.(*", req, "))")

@@ -27,8 +27,10 @@ func FlattenMD(md metadata.MD) map[string]string {
 // Streaming response metadata an interceptor or handler sets via the
 // grpc.ServerStream's SetHeader / SendHeader / SetTrailer IS propagated: leading
 // headers become a KIND_HEADER frame and trailers ride the END frame. Unary
-// interceptor header metadata set via grpc.SetHeader/SendHeader (which reads
-// from ctx, with no ServerStream on the unary path) is still NOT propagated.
+// response metadata set via grpc.SetHeader / grpc.SendHeader / grpc.SetTrailer
+// (the unary path has no ServerStream; the bridge installs a
+// grpc.ServerTransportStream that forwards into the unary metadata sink the
+// generated registrar flushes after the handler returns) IS now propagated too.
 type BridgeConfig struct {
 	Unary  grpc.UnaryServerInterceptor
 	Stream grpc.StreamServerInterceptor
@@ -38,7 +40,7 @@ type BridgeConfig struct {
 type BridgeOption func(*BridgeConfig)
 
 // WithUnaryInterceptor sets the unary server interceptor run around unary RPCs.
-// Unary response metadata set via grpc.SetHeader/SendHeader is not propagated (see BridgeConfig).
+// Unary response metadata set via grpc.SetHeader/SendHeader/SetTrailer is propagated (see BridgeConfig).
 func WithUnaryInterceptor(i grpc.UnaryServerInterceptor) BridgeOption {
 	return func(c *BridgeConfig) { c.Unary = i }
 }
