@@ -174,6 +174,14 @@ func (m *Mux) route(f *transport.Frame) {
 	case transport.Kind_KIND_HALF_CLOSE:
 		s.halfClose()
 		return
+	case transport.Kind_KIND_HEADER:
+		// Leading response metadata: server->client only. It bypasses the
+		// bounded MSG queue and is not terminal. Servers never receive it
+		// (clients don't send KIND_HEADER), so ignore it there.
+		if m.onOpen == nil {
+			s.setLeadingHeader(f.Headers)
+		}
+		return
 	case transport.Kind_KIND_END, transport.Kind_KIND_RST:
 		// Terminal frames bypass the bounded MSG queue entirely so a slow
 		// consumer can never lose or stall an END/RST. Recv drains buffered

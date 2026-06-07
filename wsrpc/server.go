@@ -84,5 +84,5 @@ func (s *Server) serveStream(stream *Stream) {
 	if st == nil {
 		st = &Status{Code: codes.OK}
 	}
-	_ = stream.end(st, nil)
+	_ = stream.end(st, stream.takeTrailer())
 }

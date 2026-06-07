@@ -24,9 +24,15 @@ type Stream struct {
 	deadlineCancel context.CancelFunc
 
 	mu       sync.Mutex
-	header   map[string]string // guarded by mu
+	header   map[string]string // leading headers (OPEN on server; KIND_HEADER on client); guarded by mu
+	trailer  map[string]string // END trailers (client receive-side); guarded by mu
 	endSt    *Status           // guarded by mu
 	endFrame *transport.Frame  // terminal END/RST frame; guarded by mu
+
+	// Server send-side metadata, guarded by mu.
+	outTrailer map[string]string // trailers flushed with the END frame
+	headerSent bool              // a leading KIND_HEADER frame was sent
+	msgSent    bool              // at least one response MSG was sent
 
 	recvCh     chan *transport.Frame // bounded inbound MSG queue, routed by the mux
 	halfClosed chan struct{}         // closed once when peer half-closes (inbound)
@@ -60,11 +66,72 @@ func (s *Stream) Context() context.Context { return s.ctx }
 // Method returns the fully-qualified RPC method.
 func (s *Stream) Method() string { return s.method }
 
-// Header returns headers/trailers observed for this stream.
+// Header returns the leading headers observed for this stream: on the server
+// side these are the request headers carried on OPEN; on the client side they
+// are the optional leading response metadata carried on a KIND_HEADER frame
+// (empty if the server never sent one).
 func (s *Stream) Header() map[string]string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.header
+}
+
+// Trailer returns the response trailers carried on the END frame (client side).
+// Empty until the stream has ended.
+func (s *Stream) Trailer() map[string]string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.trailer
+}
+
+// SendHeader sends a single leading KIND_HEADER frame carrying response metadata
+// before the first response message. It is server send-side only and may be
+// called at most once, before any Send. Returns FailedPrecondition if headers
+// were already sent or a message was already sent.
+func (s *Stream) SendHeader(md map[string]string) error {
+	s.mu.Lock()
+	if s.headerSent || s.msgSent {
+		s.mu.Unlock()
+		return Errorf(codes.FailedPrecondition, "wsrpc: headers already sent")
+	}
+	s.headerSent = true
+	s.mu.Unlock()
+	return s.mux.write(s.ctx, &transport.Frame{
+		StreamId: s.id,
+		Kind:     transport.Kind_KIND_HEADER,
+		Headers:  md,
+	})
+}
+
+// SetTrailer merges md into the trailers flushed with the END frame (server
+// send-side). Safe to call multiple times; later keys win.
+func (s *Stream) SetTrailer(md map[string]string) {
+	if len(md) == 0 {
+		return
+	}
+	s.mu.Lock()
+	if s.outTrailer == nil {
+		s.outTrailer = make(map[string]string, len(md))
+	}
+	for k, v := range md {
+		s.outTrailer[k] = v
+	}
+	s.mu.Unlock()
+}
+
+// takeTrailer returns the accumulated server send-side trailers (for serveStream).
+func (s *Stream) takeTrailer() map[string]string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.outTrailer
+}
+
+// setLeadingHeader stores leading response metadata delivered via a KIND_HEADER
+// frame (client receive-side).
+func (s *Stream) setLeadingHeader(md map[string]string) {
+	s.mu.Lock()
+	s.header = md
+	s.mu.Unlock()
 }
 
 // Send marshals msg and writes a MSG frame.
@@ -73,6 +140,9 @@ func (s *Stream) Send(msg proto.Message) error {
 	if err != nil {
 		return err
 	}
+	s.mu.Lock()
+	s.msgSent = true
+	s.mu.Unlock()
 	return s.mux.write(s.ctx, &transport.Frame{
 		StreamId: s.id,
 		Kind:     transport.Kind_KIND_MSG,
@@ -182,7 +252,7 @@ func (s *Stream) applyEnd(f *transport.Frame) *Status {
 	st := statusFromProto(f.Status)
 	s.mu.Lock()
 	if f.Headers != nil {
-		s.header = f.Headers
+		s.trailer = f.Headers
 	}
 	s.endSt = st
 	s.mu.Unlock()
