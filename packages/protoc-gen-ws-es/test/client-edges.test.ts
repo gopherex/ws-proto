@@ -110,6 +110,18 @@ describe("generated client call options", () => {
     await p;
   });
 
+  it("unary rejects with a deadline error when timeoutMs elapses and the server never responds", async () => {
+    const sock = new FakeSocket();
+    const client = new EchoServiceClient(WsTransport.fromSocket(sock));
+    const p = client.unary(create(UnaryRequestSchema, { name: "x" }), { timeoutMs: 20 });
+    await tick();
+    const open = sock.sent.find((fr) => fr.kind === Kind.KIND_OPEN && fr.streamId === 1);
+    expect(open).toBeDefined();
+    expect(open!.headers["ws-timeout-ms"]).toBe("20");
+    // Server never responds; the local deadline timer aborts the stream.
+    await expect(p).rejects.toBeInstanceOf(WsStatusError);
+  });
+
   it("unary aborts when options.signal fires (rejects, sends RST)", async () => {
     const sock = new FakeSocket();
     const client = new EchoServiceClient(WsTransport.fromSocket(sock));

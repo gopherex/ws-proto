@@ -23,6 +23,8 @@ export class WsStatusError extends Error {
 export const CODE_OK = 0;
 /** gRPC-style "CANCELLED" status code (used when a stream is RST). */
 export const CODE_CANCELLED = 1;
+/** gRPC-style "DEADLINE_EXCEEDED" status code (used when a call timeout fires). */
+export const CODE_DEADLINE_EXCEEDED = 4;
 
 /**
  * statusErrorFromProto converts a decoded END Status into a WsStatusError, or

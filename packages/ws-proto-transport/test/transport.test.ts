@@ -1,5 +1,12 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { WsTransport, WsStatusError, FakeSocket, Kind, SUBPROTOCOL } from "../src/index.js";
+import {
+  WsTransport,
+  WsStatusError,
+  FakeSocket,
+  Kind,
+  SUBPROTOCOL,
+  CODE_DEADLINE_EXCEEDED,
+} from "../src/index.js";
 
 /** tick yields to the microtask/timer queue so async plumbing settles. */
 const tick = () => new Promise<void>((r) => setTimeout(r, 0));
@@ -262,6 +269,31 @@ describe("WsTransport over FakeSocket", () => {
     await tick();
 
     expect(got).toEqual([1]);
+    const rst = sock.sent.find((f) => f.kind === Kind.KIND_RST && f.streamId === 1);
+    expect(rst).toBeDefined();
+  });
+
+  it("timeoutMs sends ws-timeout-ms on OPEN and aborts the stream on expiry", async () => {
+    const sock = new FakeSocket();
+    const t = WsTransport.fromSocket(sock);
+    const s = t.openStream("/s/Timeout", { timeoutMs: 30 });
+    await tick();
+
+    const open = sock.sent.find((f) => f.kind === Kind.KIND_OPEN && f.streamId === 1);
+    expect(open).toBeDefined();
+    expect(open!.headers["ws-timeout-ms"]).toBe("30");
+
+    // recv rejects with a DEADLINE_EXCEEDED WsStatusError after the timeout.
+    let err: unknown;
+    try {
+      await s.recv();
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(WsStatusError);
+    expect((err as WsStatusError).code).toBe(CODE_DEADLINE_EXCEEDED);
+
+    // The abort also detached the stream via RST.
     const rst = sock.sent.find((f) => f.kind === Kind.KIND_RST && f.streamId === 1);
     expect(rst).toBeDefined();
   });

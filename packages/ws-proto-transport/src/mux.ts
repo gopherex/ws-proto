@@ -1,6 +1,12 @@
 import { encodeFrame, decodeFrame, Kind } from "./frame.js";
 import { StreamImpl } from "./stream.js";
-import { WsStatusError, statusErrorFromProto, CODE_CANCELLED, abortError } from "./status.js";
+import {
+  WsStatusError,
+  statusErrorFromProto,
+  CODE_CANCELLED,
+  CODE_DEADLINE_EXCEEDED,
+  abortError,
+} from "./status.js";
 
 /**
  * StreamInit configures a new RPC stream opened via openStream: request
@@ -12,6 +18,12 @@ export interface StreamInit {
   headers?: Record<string, string>;
   /** Aborts the RPC when triggered: sends RST and rejects recv()/iteration. */
   signal?: AbortSignal;
+  /**
+   * Per-call deadline in milliseconds. When set (>0) the OPEN frame carries a
+   * `ws-timeout-ms` header so the server derives a matching deadline, and a
+   * local timer aborts the stream with CODE_DEADLINE_EXCEEDED on expiry.
+   */
+  timeoutMs?: number;
 }
 
 /**
@@ -81,9 +93,22 @@ export class Mux {
     });
     this.streams.set(id, stream);
 
-    this.writeFrame(
-      encodeFrame({ streamId: id, kind: Kind.KIND_OPEN, method, headers: init?.headers ?? {} }),
-    );
+    // Propagate a per-call deadline: carry ws-timeout-ms on OPEN so the server
+    // derives a matching deadline, and locally abort the stream on expiry.
+    const timeoutMs = init?.timeoutMs;
+    const headers = { ...(init?.headers ?? {}) };
+    if (timeoutMs !== undefined && timeoutMs > 0) {
+      headers["ws-timeout-ms"] = String(timeoutMs);
+    }
+
+    this.writeFrame(encodeFrame({ streamId: id, kind: Kind.KIND_OPEN, method, headers }));
+
+    if (timeoutMs !== undefined && timeoutMs > 0) {
+      const timer = setTimeout(() => {
+        stream.abort(new WsStatusError(CODE_DEADLINE_EXCEEDED, "deadline exceeded"));
+      }, timeoutMs);
+      stream.onClose(() => clearTimeout(timer));
+    }
 
     const signal = init?.signal;
     if (signal) {
