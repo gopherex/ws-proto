@@ -1,16 +1,34 @@
 package wsrpc
 
-import "google.golang.org/grpc"
+import (
+	"strings"
+
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/metadata"
+)
+
+// FlattenMD flattens a gRPC metadata.MD (map[string][]string) into the
+// map[string]string carried on the wire by joining each key's values with ",".
+func FlattenMD(md metadata.MD) map[string]string {
+	if len(md) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(md))
+	for k, v := range md {
+		out[k] = strings.Join(v, ",")
+	}
+	return out
+}
 
 // BridgeConfig carries optional gRPC server interceptors applied by a generated
 // XxxServiceFromGRPC bridge. Chain multiple with grpc.ChainUnaryInterceptor /
 // grpc.ChainStreamInterceptor before passing.
 //
-// Limitation: response metadata an interceptor sets via grpc.SetHeader /
-// grpc.SendHeader / grpc.SetTrailer is NOT propagated — wsrpc has no
-// gRPC-metadata channel mapped onto the wire. Interceptors used for auth,
-// logging, recovery, validation and rate limiting (which act on ctx/err) work
-// as expected; ones whose sole purpose is emitting response headers do not.
+// Streaming response metadata an interceptor or handler sets via the
+// grpc.ServerStream's SetHeader / SendHeader / SetTrailer IS propagated: leading
+// headers become a KIND_HEADER frame and trailers ride the END frame. Unary
+// interceptor header metadata set via grpc.SetHeader/SendHeader (which reads
+// from ctx, with no ServerStream on the unary path) is still NOT propagated.
 type BridgeConfig struct {
 	Unary  grpc.UnaryServerInterceptor
 	Stream grpc.StreamServerInterceptor
@@ -20,7 +38,7 @@ type BridgeConfig struct {
 type BridgeOption func(*BridgeConfig)
 
 // WithUnaryInterceptor sets the unary server interceptor run around unary RPCs.
-// Response metadata set via grpc.SetHeader/SendHeader is not propagated (see BridgeConfig).
+// Unary response metadata set via grpc.SetHeader/SendHeader is not propagated (see BridgeConfig).
 func WithUnaryInterceptor(i grpc.UnaryServerInterceptor) BridgeOption {
 	return func(c *BridgeConfig) { c.Unary = i }
 }
@@ -31,7 +49,8 @@ func WithUnaryInterceptor(i grpc.UnaryServerInterceptor) BridgeOption {
 // RecvMsg to the embedded ServerStream (the idiomatic pattern). The bridge
 // captures the client-streaming response through the underlying stream, so a
 // wrapper that swallows SendMsg would make a successful RPC fail with
-// codes.Internal. Response metadata is not propagated (see BridgeConfig).
+// codes.Internal. Streaming response metadata (SetHeader/SendHeader/SetTrailer
+// on the ServerStream) IS propagated (see BridgeConfig).
 func WithStreamInterceptor(i grpc.StreamServerInterceptor) BridgeOption {
 	return func(c *BridgeConfig) { c.Stream = i }
 }

@@ -85,6 +85,18 @@ func (g *Generator) genClientStreamWrapper(gf *protogen.GeneratedFile, svc *prot
 	gf.P("}")
 	gf.P()
 
+	gf.P("// Header returns the leading response headers (KIND_HEADER), if the server sent any.")
+	gf.P("func (x *", name, ") Header() map[string]string {")
+	gf.P("\treturn x.stream.Header()")
+	gf.P("}")
+	gf.P()
+
+	gf.P("// Trailer returns the response trailers carried on the END frame.")
+	gf.P("func (x *", name, ") Trailer() map[string]string {")
+	gf.P("\treturn x.stream.Trailer()")
+	gf.P("}")
+	gf.P()
+
 	// For client-stream, the response is collected by CloseAndRecv.
 	if methodKind(m) == kindClientStream {
 		gf.P("func (x *", name, ") CloseAndRecv() (*", res, ", error) {")

@@ -154,6 +154,16 @@ func (x *EchoService_ServerStreamClientWS) CloseSend() error {
 	return x.stream.CloseSend()
 }
 
+// Header returns the leading response headers (KIND_HEADER), if the server sent any.
+func (x *EchoService_ServerStreamClientWS) Header() map[string]string {
+	return x.stream.Header()
+}
+
+// Trailer returns the response trailers carried on the END frame.
+func (x *EchoService_ServerStreamClientWS) Trailer() map[string]string {
+	return x.stream.Trailer()
+}
+
 // EchoService_ClientStreamClientWS is the typed client stream for EchoService.ClientStream.
 type EchoService_ClientStreamClientWS struct {
 	stream *wsrpc.Stream
@@ -173,6 +183,16 @@ func (x *EchoService_ClientStreamClientWS) Recv() (*ClientStreamResponse, error)
 
 func (x *EchoService_ClientStreamClientWS) CloseSend() error {
 	return x.stream.CloseSend()
+}
+
+// Header returns the leading response headers (KIND_HEADER), if the server sent any.
+func (x *EchoService_ClientStreamClientWS) Header() map[string]string {
+	return x.stream.Header()
+}
+
+// Trailer returns the response trailers carried on the END frame.
+func (x *EchoService_ClientStreamClientWS) Trailer() map[string]string {
+	return x.stream.Trailer()
 }
 
 func (x *EchoService_ClientStreamClientWS) CloseAndRecv() (*ClientStreamResponse, error) {
@@ -201,6 +221,16 @@ func (x *EchoService_BidiClientWS) Recv() (*BidiResponse, error) {
 
 func (x *EchoService_BidiClientWS) CloseSend() error {
 	return x.stream.CloseSend()
+}
+
+// Header returns the leading response headers (KIND_HEADER), if the server sent any.
+func (x *EchoService_BidiClientWS) Header() map[string]string {
+	return x.stream.Header()
+}
+
+// Trailer returns the response trailers carried on the END frame.
+func (x *EchoService_BidiClientWS) Trailer() map[string]string {
+	return x.stream.Trailer()
 }
 
 func (c *echoServiceWSClient) Unary(ctx context.Context, req *UnaryRequest, opts ...wsrpc.CallOption) (*UnaryResponse, error) {
@@ -275,19 +305,42 @@ func EchoServiceFromGRPC(impl EchoServiceServer, opts ...wsrpc.BridgeOption) Ech
 // (client-streaming), SendMsg captures the response instead of sending it, so
 // the bridge can return it through the wsrpc handler contract.
 type echoServiceGRPCStream struct {
-	stream    *wsrpc.Stream
-	ctx       context.Context
-	capturing bool
-	captured  proto.Message
+	stream        *wsrpc.Stream
+	ctx           context.Context
+	capturing     bool
+	captured      proto.Message
+	pendingHeader metadata.MD // buffered leading headers, flushed on SendHeader or first SendMsg
 }
 
 func (x *echoServiceGRPCStream) Context() context.Context { return x.ctx }
 
-func (x *echoServiceGRPCStream) SetHeader(metadata.MD) error { return nil }
+// SetHeader buffers leading header metadata; it is sent on the first
+// SendMsg or an explicit SendHeader (gRPC ServerStream semantics).
+func (x *echoServiceGRPCStream) SetHeader(md metadata.MD) error {
+	if x.pendingHeader == nil {
+		x.pendingHeader = metadata.MD{}
+	}
+	for k, v := range md {
+		x.pendingHeader[k] = append(x.pendingHeader[k], v...)
+	}
+	return nil
+}
 
-func (x *echoServiceGRPCStream) SendHeader(metadata.MD) error { return nil }
+// SendHeader merges md into the pending headers and flushes them as a
+// leading KIND_HEADER frame on the underlying wsrpc stream.
+func (x *echoServiceGRPCStream) SendHeader(md metadata.MD) error {
+	if err := x.SetHeader(md); err != nil {
+		return err
+	}
+	err := x.stream.SendHeader(wsrpc.FlattenMD(x.pendingHeader))
+	x.pendingHeader = nil
+	return err
+}
 
-func (x *echoServiceGRPCStream) SetTrailer(metadata.MD) {}
+// SetTrailer merges md into the trailers flushed with the END frame.
+func (x *echoServiceGRPCStream) SetTrailer(md metadata.MD) {
+	x.stream.SetTrailer(wsrpc.FlattenMD(md))
+}
 
 func (x *echoServiceGRPCStream) SendMsg(m any) error {
 	pm, ok := m.(proto.Message)
@@ -297,6 +350,12 @@ func (x *echoServiceGRPCStream) SendMsg(m any) error {
 	if x.capturing {
 		x.captured = pm
 		return nil
+	}
+	// Flush any buffered leading headers before the first response message
+	// (best-effort: ignore FailedPrecondition if headers were already sent).
+	if x.pendingHeader != nil {
+		_ = x.stream.SendHeader(wsrpc.FlattenMD(x.pendingHeader))
+		x.pendingHeader = nil
 	}
 	return x.stream.Send(pm)
 }
