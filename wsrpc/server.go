@@ -39,8 +39,9 @@ func (s *Server) Register(method string, h Handler) {
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	c, err := websocket.Accept(w, r, &websocket.AcceptOptions{
-		Subprotocols:   []string{Subprotocol},
-		OriginPatterns: s.cfg.originPatterns,
+		Subprotocols:    []string{Subprotocol},
+		OriginPatterns:  s.cfg.originPatterns,
+		CompressionMode: s.cfg.compression,
 	})
 	if err != nil {
 		return

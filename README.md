@@ -308,7 +308,10 @@ proxy-visible Upgrade request instead of response metadata.
 - Default **max message size is 16 MiB** (`WithReadLimit`); keep it **below the
   smallest message cap in your proxy chain** (e.g. Cloudflare's 100 MB).
 - **Compression is off** by default (payloads are already protobuf; `permessage-deflate`
-  is occasionally mangled by intermediaries and costs memory). This is intentional.
+  is occasionally mangled by intermediaries and costs memory). Enable per-message-deflate
+  with `wsrpc.WithCompression(...)` on the server and `wsrpc.WithDialCompression(...)` on
+  the client (e.g. `wsrpc.CompressionContextTakeover`). Browser clients negotiate it
+  automatically when the server accepts it.
 - The proxy → upstream hop must be **HTTP/1.1** with `Upgrade`/`Connection`
   preserved. (coder/websocket uses the RFC 6455 HTTP/1.1 handshake, not RFC 8441
   WebSocket-over-HTTP/2.)

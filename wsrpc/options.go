@@ -4,6 +4,20 @@ import (
 	"context"
 	"net/http"
 	"time"
+
+	"github.com/coder/websocket"
+)
+
+// CompressionMode controls per-message-deflate (RFC 7692) negotiation. It is
+// re-exported from coder/websocket so callers need not import it directly.
+// Default is CompressionDisabled — payloads are already protobuf (poorly
+// compressible) and some proxies mishandle the deflate extension.
+type CompressionMode = websocket.CompressionMode
+
+const (
+	CompressionDisabled          = websocket.CompressionDisabled
+	CompressionContextTakeover   = websocket.CompressionContextTakeover
+	CompressionNoContextTakeover = websocket.CompressionNoContextTakeover
 )
 
 const (
@@ -24,6 +38,7 @@ type serverConfig struct {
 	keepalive        time.Duration
 	keepaliveTimeout time.Duration
 	receiveBuffer    int
+	compression      CompressionMode
 	connContext      func(ctx context.Context, r *http.Request) context.Context
 	middleware       []Middleware
 }
@@ -67,6 +82,12 @@ func WithConnContext(fn func(ctx context.Context, r *http.Request) context.Conte
 	return func(c *serverConfig) { c.connContext = fn }
 }
 
+// WithCompression sets the permessage-deflate negotiation mode on the server.
+// Default CompressionDisabled.
+func WithCompression(m CompressionMode) ServerOption {
+	return func(c *serverConfig) { c.compression = m }
+}
+
 // WithMiddleware appends server middleware applied to every RPC. The first
 // middleware passed runs outermost. Multiple calls accumulate in order.
 func WithMiddleware(mw ...Middleware) ServerOption {
@@ -88,6 +109,7 @@ type dialConfig struct {
 	keepalive        time.Duration
 	keepaliveTimeout time.Duration
 	receiveBuffer    int
+	compression      CompressionMode
 }
 
 // DialOption configures a client Dial.
@@ -119,6 +141,12 @@ func WithDialReceiveBuffer(n int) DialOption {
 			c.receiveBuffer = n
 		}
 	}
+}
+
+// WithDialCompression sets the permessage-deflate negotiation mode on the client.
+// Default CompressionDisabled.
+func WithDialCompression(m CompressionMode) DialOption {
+	return func(c *dialConfig) { c.compression = m }
 }
 
 func defaultDialConfig() dialConfig {

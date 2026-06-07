@@ -18,8 +18,9 @@ func Dial(ctx context.Context, url string, opts ...DialOption) (*ClientConn, err
 		o(&cfg)
 	}
 	c, _, err := websocket.Dial(ctx, url, &websocket.DialOptions{
-		Subprotocols: []string{Subprotocol},
-		HTTPHeader:   cfg.header,
+		Subprotocols:    []string{Subprotocol},
+		HTTPHeader:      cfg.header,
+		CompressionMode: cfg.compression,
 	})
 	if err != nil {
 		return nil, err
