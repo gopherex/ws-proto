@@ -29,7 +29,8 @@ type Mux struct {
 
 	onOpen func(*Stream) // server-side dispatch; nil on client
 
-	recvBuffer int // per-stream inbound MSG queue capacity
+	recvBuffer    int // per-stream inbound MSG queue capacity
+	initialWindow int // per-stream credit window (bytes) for flow control
 
 	writeMu sync.Mutex // serialize frame writes
 
@@ -44,18 +45,26 @@ func newMux(ctx context.Context, conn frameConn, onOpen func(*Stream)) *Mux {
 }
 
 func newMuxBuffered(ctx context.Context, conn frameConn, onOpen func(*Stream), recvBuffer int) *Mux {
+	return newMuxConfig(ctx, conn, onOpen, recvBuffer, defaultInitialWindow)
+}
+
+func newMuxConfig(ctx context.Context, conn frameConn, onOpen func(*Stream), recvBuffer, initialWindow int) *Mux {
 	if recvBuffer <= 0 {
 		recvBuffer = defaultReceiveBuffer
 	}
+	if initialWindow <= 0 {
+		initialWindow = defaultInitialWindow
+	}
 	c, cancel := context.WithCancel(ctx)
 	m := &Mux{
-		conn:       conn,
-		ctx:        c,
-		cancel:     cancel,
-		nextID:     1,
-		streams:    make(map[uint32]*Stream),
-		onOpen:     onOpen,
-		recvBuffer: recvBuffer,
+		conn:          conn,
+		ctx:           c,
+		cancel:        cancel,
+		nextID:        1,
+		streams:       make(map[uint32]*Stream),
+		onOpen:        onOpen,
+		recvBuffer:    recvBuffer,
+		initialWindow: initialWindow,
 	}
 	go m.readLoop()
 	return m
@@ -111,7 +120,7 @@ func (m *Mux) newClientStream(ctx context.Context, method string, headers map[st
 		}
 	}
 	id := atomic.AddUint32(&m.nextID, 2) - 2 // 1,3,5,...
-	s := newStream(ctx, m, id, method, m.recvBuffer)
+	s := newStream(ctx, m, id, method, m.recvBuffer, m.initialWindow)
 	m.mu.Lock()
 	m.streams[id] = s
 	m.mu.Unlock()
@@ -171,7 +180,7 @@ func (m *Mux) route(f *transport.Frame) {
 				sctx, dcancel = context.WithTimeout(m.ctx, time.Duration(ms)*time.Millisecond)
 			}
 		}
-		s := newStream(sctx, m, f.StreamId, f.Method, m.recvBuffer)
+		s := newStream(sctx, m, f.StreamId, f.Method, m.recvBuffer, m.initialWindow)
 		s.deadlineCancel = dcancel
 		s.header = f.Headers
 		m.mu.Lock()
@@ -198,6 +207,12 @@ func (m *Mux) route(f *transport.Frame) {
 		if m.onOpen == nil {
 			s.setLeadingHeader(f.Headers)
 		}
+		return
+	case transport.Kind_KIND_WINDOW_UPDATE:
+		// Flow control: the peer (the receiver) returns credit for what it has
+		// consumed. Credit the send window and wake any blocked Send. This runs
+		// on the read loop and never blocks (creditSend signals via a cond).
+		s.creditSend(int(f.Window))
 		return
 	case transport.Kind_KIND_END, transport.Kind_KIND_RST:
 		// Terminal frames bypass the bounded MSG queue entirely so a slow

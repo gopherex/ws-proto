@@ -68,7 +68,7 @@ func dialMux(ctx context.Context, url string, cfg dialConfig) (*Mux, error) {
 		return nil, err
 	}
 	conn := newWSConn(c, cfg.readLimit)
-	mux := newMuxBuffered(ctx, conn, nil, cfg.receiveBuffer)
+	mux := newMuxConfig(ctx, conn, nil, cfg.receiveBuffer, cfg.initialWindow)
 	mux.startKeepalive(cfg.keepalive, cfg.keepaliveTimeout)
 	return mux, nil
 }

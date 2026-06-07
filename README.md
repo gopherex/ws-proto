@@ -27,11 +27,12 @@ v2 output (it imports the generated `*_pb.ts` message types and schemas).
   ```proto
   message Frame {
     uint32 stream_id = 1;             // client-allocated, monotonic odd ids
-    Kind   kind      = 2;             // OPEN | MSG | HALF_CLOSE | END | RST
+    Kind   kind      = 2;             // OPEN | MSG | HALF_CLOSE | END | RST | HEADER | WINDOW_UPDATE
     map<string,string> headers = 3;   // OPEN: metadata + deadline; END: trailers
     bytes  payload   = 4;             // MSG: one marshaled request/response message
     Status status    = 5;             // END only: gRPC-style code/message/details
     string method    = 6;             // OPEN only: "/pkg.Service/Method"
+    uint32 window    = 8;             // WINDOW_UPDATE only: credit delta (bytes) returned to the sender
   }
   ```
 
@@ -42,6 +43,33 @@ v2 output (it imports the generated `*_pb.ts` message types and schemas).
   Connection-level concerns (auth, tenant routing) ride the **HTTP Upgrade
   request headers**, which proxies can inspect — see
   [Deploying behind a proxy](#deploying-behind-a-proxy).
+
+---
+
+## Flow control
+
+Each stream has a **per-stream credit window** (default **256 KiB**) for
+backpressure, symmetric in both directions. The receiver advertises credit; a
+sender's `Send` **blocks** (it never drops) until enough credit is available, so
+a well-behaved sender can't overrun a slow receiver:
+
+- The receiver returns credit (a `WINDOW_UPDATE` frame carrying a byte delta) as
+  it **consumes** messages — not merely as they arrive. That is what makes the
+  window real backpressure.
+- A single message **larger than the whole window** is still delivered: a `MSG`
+  may be sent whenever the window is `> 0`, after which the window is allowed to
+  go negative; subsequent sends then wait for credit. This matches gRPC/HTTP2
+  semantics and avoids a deadlock on an oversized message.
+- The window assumes the same default on both peers with **no handshake**. Tune
+  it with `WithInitialWindow(n)` (Go server), `WithDialInitialWindow(n)` (Go
+  client), or `initialWindow` (TS `WsTransportOptions`); `n <= 0` keeps the
+  default. Mixing a windowed peer with a non-windowed one can stall a sender once
+  the initial window is exhausted, so ship both sides together.
+
+The bounded **receive buffer** (`WithReceiveBuffer` / `maxReceiveQueue`) remains
+a **backstop**: a misbehaving peer that ignores the window still can't grow
+memory without limit — its stream is reset with `ResourceExhausted`. A
+well-behaved peer never hits it.
 
 ---
 

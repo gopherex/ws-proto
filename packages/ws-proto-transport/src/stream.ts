@@ -52,12 +52,35 @@ export interface StreamHooks {
   halfClose(streamId: number): void;
   /** reset writes an RST frame and detaches the stream from the mux (client cancel). */
   reset(streamId: number): void;
+  /**
+   * windowUpdate writes a KIND_WINDOW_UPDATE frame returning `delta` bytes of
+   * receive credit to the peer (flow control). Called as the reader consumes
+   * MSGs; the mux serializes it onto the socket.
+   */
+  windowUpdate(streamId: number, delta: number): void;
 }
+
+/** DEFAULT_INITIAL_WINDOW is the per-stream credit window (bytes) for flow control. */
+export const DEFAULT_INITIAL_WINDOW = 256 * 1024; // 256 KiB
 
 export class StreamImpl implements ClientStream {
   readonly id: number;
   private readonly hooks: StreamHooks;
   private readonly inbound = new AsyncQueue<Uint8Array>();
+
+  // ---- Flow control (credit windowing) ----
+  // The public send() is synchronous (void): it appends to outbound and a pump
+  // drains it as send-window credit allows. A MSG may be sent whenever
+  // sendWindow > 0; sendWindow then decrements by payload length and is allowed
+  // to go NEGATIVE, so a single message larger than the whole window is still
+  // delivered (matching the Go side / gRPC-HTTP2 semantics) and never deadlocks.
+  // Credit returns when the peer sends a KIND_WINDOW_UPDATE (creditSend).
+  private readonly initialWindow: number;
+  private sendWindow: number;
+  private readonly outbound: Uint8Array[] = [];
+  // Receiver side: bytes consumed by recv()/iteration but not yet returned to the
+  // peer; flushed as one KIND_WINDOW_UPDATE once it crosses initialWindow/2.
+  private pendingCredit = 0;
 
   private sendClosed = false;
   private finished = false;
@@ -74,9 +97,11 @@ export class StreamImpl implements ClientStream {
   private readonly leadingPromise: Promise<Record<string, string>>;
   private leadingSettled = false;
 
-  constructor(id: number, hooks: StreamHooks) {
+  constructor(id: number, hooks: StreamHooks, initialWindow: number = DEFAULT_INITIAL_WINDOW) {
     this.id = id;
     this.hooks = hooks;
+    this.initialWindow = initialWindow > 0 ? initialWindow : DEFAULT_INITIAL_WINDOW;
+    this.sendWindow = this.initialWindow;
     // headersPromise only ever resolves (with trailers); the error status is
     // delivered through recv()/iteration, so there is no rejection path.
     this.headersPromise = new Promise<Record<string, string>>((resolve) => {
@@ -93,7 +118,36 @@ export class StreamImpl implements ClientStream {
     if (this.sendClosed || this.finished) {
       return;
     }
-    this.hooks.sendMsg(this.id, payload);
+    // Buffer and let the pump flush as the send window allows. Keeps the public
+    // signature synchronous while honoring per-stream backpressure.
+    this.outbound.push(payload);
+    this.pump();
+  }
+
+  /**
+   * pump drains buffered outbound MSGs while the send window permits. A MSG is
+   * sent whenever sendWindow > 0; the window is then decremented by the payload
+   * length and may go negative (so an oversized message is still sent once, then
+   * later sends wait for credit). Re-invoked by creditSend when credit arrives.
+   */
+  private pump(): void {
+    while (this.outbound.length > 0 && this.sendWindow > 0 && !this.finished) {
+      const payload = this.outbound.shift()!;
+      this.sendWindow -= payload.length;
+      this.hooks.sendMsg(this.id, payload);
+    }
+  }
+
+  /**
+   * creditSend adds `delta` bytes of send credit (an inbound KIND_WINDOW_UPDATE)
+   * and resumes the pump so any buffered sends that were waiting can proceed.
+   */
+  creditSend(delta: number): void {
+    if (delta <= 0) {
+      return;
+    }
+    this.sendWindow += delta;
+    this.pump();
   }
 
   closeSend(): void {
@@ -109,7 +163,27 @@ export class StreamImpl implements ClientStream {
     if (r.done) {
       return null;
     }
+    this.returnCredit(r.value!.length);
     return r.value!;
+  }
+
+  /**
+   * returnCredit accumulates consumed bytes and, once the pending total crosses
+   * initialWindow/2, posts one coalesced KIND_WINDOW_UPDATE to the peer so its
+   * blocked sender regains credit. Credit is returned on CONSUMPTION (here), not
+   * on arrival — that is what makes the window real backpressure.
+   */
+  private returnCredit(n: number): void {
+    if (n <= 0 || this.finished) {
+      return;
+    }
+    this.pendingCredit += n;
+    const threshold = Math.max(1, Math.floor(this.initialWindow / 2));
+    if (this.pendingCredit >= threshold) {
+      const delta = this.pendingCredit;
+      this.pendingCredit = 0;
+      this.hooks.windowUpdate(this.id, delta);
+    }
   }
 
   responseHeaders(): Promise<Record<string, string>> {
@@ -128,6 +202,7 @@ export class StreamImpl implements ClientStream {
         if (r.done) {
           return { done: true, value: undefined };
         }
+        self.returnCredit(r.value!.length);
         return { done: false, value: r.value! };
       },
       async return(): Promise<IteratorResult<Uint8Array>> {

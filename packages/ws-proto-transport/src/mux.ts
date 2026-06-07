@@ -1,5 +1,5 @@
 import { encodeFrame, decodeFrame, Kind } from "./frame.js";
-import { StreamImpl } from "./stream.js";
+import { StreamImpl, DEFAULT_INITIAL_WINDOW } from "./stream.js";
 import {
   WsStatusError,
   statusErrorFromProto,
@@ -16,6 +16,8 @@ import {
  * rather than buffering without limit.
  */
 export const DEFAULT_MAX_RECEIVE_QUEUE = 256;
+
+export { DEFAULT_INITIAL_WINDOW } from "./stream.js";
 
 /**
  * StreamInit configures a new RPC stream opened via openStream: request
@@ -63,6 +65,7 @@ export class Mux {
   private readonly streams = new Map<number, StreamImpl>();
   private nextId = 1;
   private readonly maxReceiveQueue: number;
+  private readonly initialWindow: number;
 
   /** Frames produced before the socket reaches OPEN are buffered here. */
   private readonly sendBuffer: Uint8Array[] = [];
@@ -71,9 +74,14 @@ export class Mux {
   /** Fired once when the socket drops (not via close()); used to drive reconnect. */
   private onDisconnect?: () => void;
 
-  constructor(ws: WebSocketLike, maxReceiveQueue: number = DEFAULT_MAX_RECEIVE_QUEUE) {
+  constructor(
+    ws: WebSocketLike,
+    maxReceiveQueue: number = DEFAULT_MAX_RECEIVE_QUEUE,
+    initialWindow: number = DEFAULT_INITIAL_WINDOW,
+  ) {
     this.ws = ws;
     this.maxReceiveQueue = maxReceiveQueue > 0 ? maxReceiveQueue : DEFAULT_MAX_RECEIVE_QUEUE;
+    this.initialWindow = initialWindow > 0 ? initialWindow : DEFAULT_INITIAL_WINDOW;
     this.ws.binaryType = "arraybuffer";
 
     // If the socket is already open (e.g. fromSocket on a live socket), flush.
@@ -113,15 +121,24 @@ export class Mux {
     const id = this.nextId;
     this.nextId += 2;
 
-    const stream = new StreamImpl(id, {
-      sendMsg: (sid, payload) =>
-        this.writeFrame(encodeFrame({ streamId: sid, kind: Kind.KIND_MSG, payload })),
-      halfClose: (sid) => this.writeFrame(encodeFrame({ streamId: sid, kind: Kind.KIND_HALF_CLOSE })),
-      reset: (sid) => {
-        this.writeFrame(encodeFrame({ streamId: sid, kind: Kind.KIND_RST }));
-        this.streams.delete(sid);
+    const stream = new StreamImpl(
+      id,
+      {
+        sendMsg: (sid, payload) =>
+          this.writeFrame(encodeFrame({ streamId: sid, kind: Kind.KIND_MSG, payload })),
+        halfClose: (sid) =>
+          this.writeFrame(encodeFrame({ streamId: sid, kind: Kind.KIND_HALF_CLOSE })),
+        reset: (sid) => {
+          this.writeFrame(encodeFrame({ streamId: sid, kind: Kind.KIND_RST }));
+          this.streams.delete(sid);
+        },
+        windowUpdate: (sid, delta) =>
+          this.writeFrame(
+            encodeFrame({ streamId: sid, kind: Kind.KIND_WINDOW_UPDATE, window: delta }),
+          ),
       },
-    });
+      this.initialWindow,
+    );
     this.streams.set(id, stream);
 
     // Propagate a per-call deadline: carry ws-timeout-ms on OPEN so the server
@@ -198,6 +215,17 @@ export class Mux {
           return;
         }
         s.setLeadingHeaders(frame.headers);
+        return;
+      }
+
+      case Kind.KIND_WINDOW_UPDATE: {
+        // Flow control: the peer returns send credit for what it has consumed.
+        // Non-terminal, not enqueued — credit the stream and resume its pump.
+        const s = this.streams.get(frame.streamId);
+        if (!s) {
+          return;
+        }
+        s.creditSend(frame.window);
         return;
       }
 

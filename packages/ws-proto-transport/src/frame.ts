@@ -20,6 +20,7 @@ export const Kind = {
   KIND_END: GenKind.END,
   KIND_RST: GenKind.RST,
   KIND_HEADER: GenKind.HEADER,
+  KIND_WINDOW_UPDATE: GenKind.WINDOW_UPDATE,
 } as const;
 
 export type Kind = (typeof Kind)[keyof typeof Kind];
@@ -35,6 +36,8 @@ export interface FrameInit {
   method?: string;
   headers?: Record<string, string>;
   payload?: Uint8Array;
+  /** WINDOW_UPDATE only: credit delta in bytes returned to the sender. */
+  window?: number;
   status?: {
     code: number;
     message?: string;
@@ -59,6 +62,7 @@ export function encodeFrame(init: FrameInit): Uint8Array {
     method: init.method ?? "",
     headers: init.headers ?? {},
     payload: init.payload ?? new Uint8Array(0),
+    window: init.window ?? 0,
     status,
   });
   return toBinary(FrameSchema, frame);

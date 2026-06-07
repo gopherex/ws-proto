@@ -51,7 +51,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		base = s.cfg.connContext(base, r)
 	}
 	conn := newWSConn(c, s.cfg.readLimit)
-	mux := newMuxBuffered(base, conn, func(stream *Stream) { go s.serveStream(stream) }, s.cfg.receiveBuffer)
+	mux := newMuxConfig(base, conn, func(stream *Stream) { go s.serveStream(stream) }, s.cfg.receiveBuffer, s.cfg.initialWindow)
 	mux.startKeepalive(s.cfg.keepalive, s.cfg.keepaliveTimeout)
 	<-mux.ctx.Done()
 	if err := c.Close(websocket.StatusNormalClosure, ""); err != nil {

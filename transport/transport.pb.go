@@ -24,13 +24,14 @@ const (
 type Kind int32
 
 const (
-	Kind_KIND_UNSPECIFIED Kind = 0
-	Kind_KIND_OPEN        Kind = 1
-	Kind_KIND_MSG         Kind = 2
-	Kind_KIND_HALF_CLOSE  Kind = 3
-	Kind_KIND_END         Kind = 4
-	Kind_KIND_RST         Kind = 5
-	Kind_KIND_HEADER      Kind = 6 // server->client only: leading response metadata, at most once before any MSG
+	Kind_KIND_UNSPECIFIED   Kind = 0
+	Kind_KIND_OPEN          Kind = 1
+	Kind_KIND_MSG           Kind = 2
+	Kind_KIND_HALF_CLOSE    Kind = 3
+	Kind_KIND_END           Kind = 4
+	Kind_KIND_RST           Kind = 5
+	Kind_KIND_HEADER        Kind = 6 // server->client only: leading response metadata, at most once before any MSG
+	Kind_KIND_WINDOW_UPDATE Kind = 7 // flow control: returns credit (window delta bytes) to the sender for stream_id
 )
 
 // Enum value maps for Kind.
@@ -43,15 +44,17 @@ var (
 		4: "KIND_END",
 		5: "KIND_RST",
 		6: "KIND_HEADER",
+		7: "KIND_WINDOW_UPDATE",
 	}
 	Kind_value = map[string]int32{
-		"KIND_UNSPECIFIED": 0,
-		"KIND_OPEN":        1,
-		"KIND_MSG":         2,
-		"KIND_HALF_CLOSE":  3,
-		"KIND_END":         4,
-		"KIND_RST":         5,
-		"KIND_HEADER":      6,
+		"KIND_UNSPECIFIED":   0,
+		"KIND_OPEN":          1,
+		"KIND_MSG":           2,
+		"KIND_HALF_CLOSE":    3,
+		"KIND_END":           4,
+		"KIND_RST":           5,
+		"KIND_HEADER":        6,
+		"KIND_WINDOW_UPDATE": 7,
 	}
 )
 
@@ -91,6 +94,7 @@ type Frame struct {
 	Payload       []byte                 `protobuf:"bytes,4,opt,name=payload,proto3" json:"payload,omitempty"`                                                                           // MSG: one marshaled request/response message
 	Status        *Status                `protobuf:"bytes,5,opt,name=status,proto3" json:"status,omitempty"`                                                                             // END only
 	Method        string                 `protobuf:"bytes,6,opt,name=method,proto3" json:"method,omitempty"`                                                                             // OPEN only: "/pkg.Service/Method"
+	Window        uint32                 `protobuf:"varint,8,opt,name=window,proto3" json:"window,omitempty"`                                                                            // WINDOW_UPDATE only: credit delta in bytes returned to the sender for stream_id
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -167,6 +171,13 @@ func (x *Frame) GetMethod() string {
 	return ""
 }
 
+func (x *Frame) GetWindow() uint32 {
+	if x != nil {
+		return x.Window
+	}
+	return 0
+}
+
 type Status struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Code          int32                  `protobuf:"varint,1,opt,name=code,proto3" json:"code,omitempty"` // gRPC-style status code
@@ -231,21 +242,22 @@ var File_transport_transport_proto protoreflect.FileDescriptor
 
 const file_transport_transport_proto_rawDesc = "" +
 	"\n" +
-	"\x19transport/transport.proto\x12\x14wsproto.transport.v1\"\xbc\x02\n" +
+	"\x19transport/transport.proto\x12\x14wsproto.transport.v1\"\xd4\x02\n" +
 	"\x05Frame\x12\x1b\n" +
 	"\tstream_id\x18\x01 \x01(\rR\bstreamId\x12.\n" +
 	"\x04kind\x18\x02 \x01(\x0e2\x1a.wsproto.transport.v1.KindR\x04kind\x12B\n" +
 	"\aheaders\x18\x03 \x03(\v2(.wsproto.transport.v1.Frame.HeadersEntryR\aheaders\x12\x18\n" +
 	"\apayload\x18\x04 \x01(\fR\apayload\x124\n" +
 	"\x06status\x18\x05 \x01(\v2\x1c.wsproto.transport.v1.StatusR\x06status\x12\x16\n" +
-	"\x06method\x18\x06 \x01(\tR\x06method\x1a:\n" +
+	"\x06method\x18\x06 \x01(\tR\x06method\x12\x16\n" +
+	"\x06window\x18\b \x01(\rR\x06window\x1a:\n" +
 	"\fHeadersEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"P\n" +
 	"\x06Status\x12\x12\n" +
 	"\x04code\x18\x01 \x01(\x05R\x04code\x12\x18\n" +
 	"\amessage\x18\x02 \x01(\tR\amessage\x12\x18\n" +
-	"\adetails\x18\x03 \x03(\fR\adetails*{\n" +
+	"\adetails\x18\x03 \x03(\fR\adetails*\x93\x01\n" +
 	"\x04Kind\x12\x14\n" +
 	"\x10KIND_UNSPECIFIED\x10\x00\x12\r\n" +
 	"\tKIND_OPEN\x10\x01\x12\f\n" +
@@ -253,7 +265,8 @@ const file_transport_transport_proto_rawDesc = "" +
 	"\x0fKIND_HALF_CLOSE\x10\x03\x12\f\n" +
 	"\bKIND_END\x10\x04\x12\f\n" +
 	"\bKIND_RST\x10\x05\x12\x0f\n" +
-	"\vKIND_HEADER\x10\x06B2Z0github.com/gopherex/ws-proto/transport;transportb\x06proto3"
+	"\vKIND_HEADER\x10\x06\x12\x16\n" +
+	"\x12KIND_WINDOW_UPDATE\x10\aB2Z0github.com/gopherex/ws-proto/transport;transportb\x06proto3"
 
 var (
 	file_transport_transport_proto_rawDescOnce sync.Once

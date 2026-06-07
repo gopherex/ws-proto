@@ -36,6 +36,15 @@ const RECONNECT_FACTOR = 2;
  */
 export interface WsTransportOptions {
   maxReceiveQueue?: number;
+  /**
+   * initialWindow is the per-stream flow-control credit window in bytes
+   * (default 256*1024). A sender's buffered send() drains only as the peer
+   * returns credit (KIND_WINDOW_UPDATE) by consuming MSGs, so a well-behaved
+   * sender never overruns a slow receiver. Both peers must assume the same
+   * value (no handshake). maxReceiveQueue remains a backstop for peers that
+   * ignore the window.
+   */
+  initialWindow?: number;
   reconnect?: boolean;
   backoff?: { initialMs?: number; maxMs?: number };
   createSocket?: (url: string) => WebSocketLike;
@@ -49,6 +58,7 @@ export interface WsTransportOptions {
 export class WsTransport {
   private mux: Mux;
   private readonly maxReceiveQueue?: number;
+  private readonly initialWindow?: number;
 
   // Reconnect machinery (active only when reconnect is enabled and the transport
   // owns dialing, i.e. not via fromSocket).
@@ -74,6 +84,7 @@ export class WsTransport {
       fromExisting === true ? options : (fromExisting as WsTransportOptions | undefined);
 
     this.maxReceiveQueue = opts?.maxReceiveQueue;
+    this.initialWindow = opts?.initialWindow;
     this.createSocket =
       opts?.createSocket ??
       ((u: string) => new WebSocket(u, SUBPROTOCOL) as unknown as WebSocketLike);
@@ -87,7 +98,7 @@ export class WsTransport {
     if (fromExisting === true) {
       // fromSocket: wrap the given socket and never reconnect (it doesn't own it).
       this.reconnectEnabled = false;
-      this.mux = new Mux(urlOrSocket as WebSocketLike, this.maxReceiveQueue);
+      this.mux = new Mux(urlOrSocket as WebSocketLike, this.maxReceiveQueue, this.initialWindow);
       return;
     }
 
@@ -105,7 +116,7 @@ export class WsTransport {
   /** connect opens a fresh socket+mux and, when reconnect is on, wires the redial hook. */
   private connect(): Mux {
     const ws = this.createSocket(this.url as string);
-    const mux = new Mux(ws, this.maxReceiveQueue);
+    const mux = new Mux(ws, this.maxReceiveQueue, this.initialWindow);
     if (this.reconnectEnabled) {
       // A successful new socket resets the backoff once it actually opens.
       ws.onopen = ((prev) => () => {

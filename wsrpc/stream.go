@@ -41,23 +41,42 @@ type Stream struct {
 	sendDone     bool // guarded by mu
 	halfCloseOne sync.Once
 	endOne       sync.Once
+
+	// Flow control (credit windowing), all guarded by mu.
+	// sendWindow is the credit (bytes) we may send before blocking. It starts at
+	// initialWindow and is decremented when a MSG is sent (may go negative once,
+	// see Send) and incremented when a KIND_WINDOW_UPDATE arrives. sendCond
+	// signals a blocked Send when credit is returned or the stream ends.
+	initialWindow int
+	sendWindow    int
+	sendCond      *sync.Cond
+	// pendingCredit accumulates bytes consumed by Recv but not yet returned to
+	// the peer; flushed as a KIND_WINDOW_UPDATE once it crosses initialWindow/2.
+	pendingCredit int
 }
 
-func newStream(ctx context.Context, mux *Mux, id uint32, method string, recvBuffer int) *Stream {
+func newStream(ctx context.Context, mux *Mux, id uint32, method string, recvBuffer, initialWindow int) *Stream {
 	if recvBuffer <= 0 {
 		recvBuffer = defaultReceiveBuffer
 	}
-	c, cancel := context.WithCancel(ctx)
-	return &Stream{
-		id:         id,
-		method:     method,
-		mux:        mux,
-		ctx:        c,
-		cancel:     cancel,
-		recvCh:     make(chan *transport.Frame, recvBuffer),
-		halfClosed: make(chan struct{}),
-		ended:      make(chan struct{}),
+	if initialWindow <= 0 {
+		initialWindow = defaultInitialWindow
 	}
+	c, cancel := context.WithCancel(ctx)
+	s := &Stream{
+		id:            id,
+		method:        method,
+		mux:           mux,
+		ctx:           c,
+		cancel:        cancel,
+		recvCh:        make(chan *transport.Frame, recvBuffer),
+		halfClosed:    make(chan struct{}),
+		ended:         make(chan struct{}),
+		initialWindow: initialWindow,
+		sendWindow:    initialWindow,
+	}
+	s.sendCond = sync.NewCond(&s.mu)
+	return s
 }
 
 // Context returns the stream context, cancelled on end/RST.
@@ -134,19 +153,126 @@ func (s *Stream) setLeadingHeader(md map[string]string) {
 	s.mu.Unlock()
 }
 
-// Send marshals msg and writes a MSG frame.
+// Send marshals msg and writes a MSG frame, blocking on the CALLER goroutine
+// until enough send-window credit is available (per-stream flow control).
+//
+// Credit model: a MSG may be sent whenever sendWindow > 0; sendWindow is then
+// decremented by len(payload) and is allowed to go NEGATIVE. This means a single
+// message larger than the whole window is still delivered once any credit is
+// available (matching gRPC/HTTP2 semantics, and avoiding a deadlock where a
+// message bigger than the window could never be sent). Subsequent sends then
+// wait until the peer returns enough credit to bring sendWindow back above 0.
+//
+// Blocking is on sendCond, signalled by creditSend (a KIND_WINDOW_UPDATE on the
+// read loop) or by any terminal path (wakeSenders). The read loop is never
+// blocked: it only ever signals the cond, never waits on it.
 func (s *Stream) Send(msg proto.Message) error {
 	b, err := proto.Marshal(msg)
 	if err != nil {
 		return err
 	}
+	n := len(b)
+
 	s.mu.Lock()
+	for s.sendWindow <= 0 {
+		// Surface a terminal status / context cancellation rather than blocking
+		// forever when the stream has ended or the caller's ctx is done.
+		if err := s.sendBlockErrLocked(); err != nil {
+			s.mu.Unlock()
+			return err
+		}
+		s.sendCond.Wait()
+	}
+	s.sendWindow -= n // may go negative for an oversized message; intentional
 	s.msgSent = true
 	s.mu.Unlock()
+
 	return s.mux.write(s.ctx, &transport.Frame{
 		StreamId: s.id,
 		Kind:     transport.Kind_KIND_MSG,
 		Payload:  b,
+	})
+}
+
+// sendBlockErrLocked reports the error a blocked Send should return instead of
+// waiting: a recorded terminal status, a pending terminal frame, or the context
+// error. Caller holds mu.
+func (s *Stream) sendBlockErrLocked() error {
+	if s.endSt != nil {
+		if s.endSt.Code != codes.OK {
+			return s.endSt
+		}
+		return io.EOF
+	}
+	// A terminal END/RST frame may have arrived (signalEnd) before applyEnd ran.
+	select {
+	case <-s.ended:
+		return io.EOF
+	default:
+	}
+	if err := s.ctx.Err(); err != nil {
+		return err
+	}
+	return nil
+}
+
+// creditSend adds delta bytes of credit to the send window and wakes any blocked
+// Send. Called from the read loop on an inbound KIND_WINDOW_UPDATE; never blocks.
+func (s *Stream) creditSend(delta int) {
+	if delta <= 0 {
+		return
+	}
+	s.mu.Lock()
+	s.sendWindow += delta
+	s.mu.Unlock()
+	s.sendCond.Broadcast()
+}
+
+// wakeSenders unblocks any goroutine parked in Send so it can observe a terminal
+// status / cancelled context. Called from every terminal path.
+func (s *Stream) wakeSenders() {
+	if s.sendCond != nil {
+		s.sendCond.Broadcast()
+	}
+}
+
+// deliverMsg unmarshals a consumed MSG and, as part of consuming it, returns
+// flow-control credit to the peer (KIND_WINDOW_UPDATE). Credit is returned on
+// CONSUMPTION (here), not on arrival, which is what makes the window real
+// backpressure: a sender only regains credit once the receiver has drained.
+func (s *Stream) deliverMsg(f *transport.Frame, msg proto.Message) error {
+	s.returnCredit(len(f.Payload))
+	return proto.Unmarshal(f.Payload, msg)
+}
+
+// returnCredit accumulates consumed bytes and, once the pending total crosses
+// initialWindow/2, sends a single coalesced KIND_WINDOW_UPDATE to the peer so it
+// can resume a blocked Send. Coalescing avoids a window-update per message.
+func (s *Stream) returnCredit(n int) {
+	if n <= 0 {
+		return
+	}
+	s.mu.Lock()
+	s.pendingCredit += n
+	threshold := s.initialWindow / 2
+	if threshold < 1 {
+		threshold = 1
+	}
+	var delta uint32
+	if s.pendingCredit >= threshold {
+		delta = uint32(s.pendingCredit)
+		s.pendingCredit = 0
+	}
+	s.mu.Unlock()
+	if delta == 0 {
+		return
+	}
+	// Best-effort: a write failure means the stream/conn is going away, in which
+	// case credit no longer matters. Never blocks the read loop (runs on Recv).
+	_ = s.mux.write(s.ctx, &transport.Frame{
+		StreamId: s.id,
+		Kind:     transport.Kind_KIND_WINDOW_UPDATE,
+		Window:   delta,
 	})
 }
 
@@ -157,12 +283,12 @@ func (s *Stream) Recv(msg proto.Message) error {
 	// preempt pending data (drain-first).
 	select {
 	case f := <-s.recvCh:
-		return proto.Unmarshal(f.Payload, msg)
+		return s.deliverMsg(f, msg)
 	default:
 	}
 	select {
 	case f := <-s.recvCh:
-		return proto.Unmarshal(f.Payload, msg)
+		return s.deliverMsg(f, msg)
 	case <-s.halfClosed:
 		return io.EOF
 	case <-s.ended:
@@ -185,7 +311,7 @@ func (s *Stream) Recv(msg proto.Message) error {
 func (s *Stream) recvEnded(msg proto.Message) error {
 	select {
 	case f := <-s.recvCh:
-		return proto.Unmarshal(f.Payload, msg)
+		return s.deliverMsg(f, msg)
 	default:
 	}
 	s.mu.Lock()
@@ -256,6 +382,7 @@ func (s *Stream) applyEnd(f *transport.Frame) *Status {
 	}
 	s.endSt = st
 	s.mu.Unlock()
+	s.wakeSenders()
 	s.cancel()
 	return st
 }
@@ -267,6 +394,7 @@ func (s *Stream) failWith(err error) {
 	s.mu.Lock()
 	s.endSt = FromError(err)
 	s.mu.Unlock()
+	s.wakeSenders()
 	s.endOne.Do(func() { close(s.ended) }) // terminal, frameless
 	s.cancel()
 }
@@ -293,6 +421,7 @@ func (s *Stream) signalEnd(f *transport.Frame) {
 		s.endFrame = f
 		s.mu.Unlock()
 		close(s.ended)
+		s.wakeSenders()
 	})
 }
 

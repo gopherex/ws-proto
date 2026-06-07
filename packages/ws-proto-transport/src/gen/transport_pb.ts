@@ -10,7 +10,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file transport.proto.
  */
 export const file_transport: GenFile = /*@__PURE__*/
-  fileDesc("Cg90cmFuc3BvcnQucHJvdG8SFHdzcHJvdG8udHJhbnNwb3J0LnYxIv4BCgVGcmFtZRIRCglzdHJlYW1faWQYASABKA0SKAoEa2luZBgCIAEoDjIaLndzcHJvdG8udHJhbnNwb3J0LnYxLktpbmQSOQoHaGVhZGVycxgDIAMoCzIoLndzcHJvdG8udHJhbnNwb3J0LnYxLkZyYW1lLkhlYWRlcnNFbnRyeRIPCgdwYXlsb2FkGAQgASgMEiwKBnN0YXR1cxgFIAEoCzIcLndzcHJvdG8udHJhbnNwb3J0LnYxLlN0YXR1cxIOCgZtZXRob2QYBiABKAkaLgoMSGVhZGVyc0VudHJ5EgsKA2tleRgBIAEoCRINCgV2YWx1ZRgCIAEoCToCOAEiOAoGU3RhdHVzEgwKBGNvZGUYASABKAUSDwoHbWVzc2FnZRgCIAEoCRIPCgdkZXRhaWxzGAMgAygMKnsKBEtpbmQSFAoQS0lORF9VTlNQRUNJRklFRBAAEg0KCUtJTkRfT1BFThABEgwKCEtJTkRfTVNHEAISEwoPS0lORF9IQUxGX0NMT1NFEAMSDAoIS0lORF9FTkQQBBIMCghLSU5EX1JTVBAFEg8KC0tJTkRfSEVBREVSEAZCMlowZ2l0aHViLmNvbS9nb3BoZXJleC93cy1wcm90by90cmFuc3BvcnQ7dHJhbnNwb3J0YgZwcm90bzM");
+  fileDesc("Cg90cmFuc3BvcnQucHJvdG8SFHdzcHJvdG8udHJhbnNwb3J0LnYxIo4CCgVGcmFtZRIRCglzdHJlYW1faWQYASABKA0SKAoEa2luZBgCIAEoDjIaLndzcHJvdG8udHJhbnNwb3J0LnYxLktpbmQSOQoHaGVhZGVycxgDIAMoCzIoLndzcHJvdG8udHJhbnNwb3J0LnYxLkZyYW1lLkhlYWRlcnNFbnRyeRIPCgdwYXlsb2FkGAQgASgMEiwKBnN0YXR1cxgFIAEoCzIcLndzcHJvdG8udHJhbnNwb3J0LnYxLlN0YXR1cxIOCgZtZXRob2QYBiABKAkSDgoGd2luZG93GAggASgNGi4KDEhlYWRlcnNFbnRyeRILCgNrZXkYASABKAkSDQoFdmFsdWUYAiABKAk6AjgBIjgKBlN0YXR1cxIMCgRjb2RlGAEgASgFEg8KB21lc3NhZ2UYAiABKAkSDwoHZGV0YWlscxgDIAMoDCqTAQoES2luZBIUChBLSU5EX1VOU1BFQ0lGSUVEEAASDQoJS0lORF9PUEVOEAESDAoIS0lORF9NU0cQAhITCg9LSU5EX0hBTEZfQ0xPU0UQAxIMCghLSU5EX0VORBAEEgwKCEtJTkRfUlNUEAUSDwoLS0lORF9IRUFERVIQBhIWChJLSU5EX1dJTkRPV19VUERBVEUQB0IyWjBnaXRodWIuY29tL2dvcGhlcmV4L3dzLXByb3RvL3RyYW5zcG9ydDt0cmFuc3BvcnRiBnByb3RvMw");
 
 /**
  * Frame is the single wire unit multiplexed over one WebSocket connection.
@@ -57,6 +57,13 @@ export type Frame = Message<"wsproto.transport.v1.Frame"> & {
    * @generated from field: string method = 6;
    */
   method: string;
+
+  /**
+   * WINDOW_UPDATE only: credit delta in bytes returned to the sender for stream_id
+   *
+   * @generated from field: uint32 window = 8;
+   */
+  window: number;
 };
 
 /**
@@ -137,6 +144,13 @@ export enum Kind {
    * @generated from enum value: KIND_HEADER = 6;
    */
   HEADER = 6,
+
+  /**
+   * flow control: returns credit (window delta bytes) to the sender for stream_id
+   *
+   * @generated from enum value: KIND_WINDOW_UPDATE = 7;
+   */
+  WINDOW_UPDATE = 7,
 }
 
 /**

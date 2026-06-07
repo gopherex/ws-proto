@@ -12,6 +12,7 @@ message Frame {
   bytes payload = 4;                // MSG: one marshaled request/response message
   Status status = 5;                // END only
   string method = 6;                // OPEN only: "/pkg.Service/Method"
+  uint32 window = 8;                // WINDOW_UPDATE only: credit delta in bytes returned to the sender for stream_id
 }
 
 enum Kind {
@@ -22,6 +23,7 @@ enum Kind {
   KIND_END = 4;
   KIND_RST = 5;
   KIND_HEADER = 6;                  // server->client only: leading response metadata, at most once before any MSG
+  KIND_WINDOW_UPDATE = 7;           // flow control: returns credit (window delta bytes) to the sender for stream_id
 }
 
 message Status {

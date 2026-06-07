@@ -28,6 +28,11 @@ const (
 	// consumer that fills this buffer is reset rather than blocking the shared
 	// read loop (head-of-line blocking / memory safety valve).
 	defaultReceiveBuffer int = 256
+	// defaultInitialWindow is the per-stream credit window (bytes) each peer
+	// assumes for both send and receive directions with no handshake. A sender's
+	// Send blocks once it would exceed the available send window; the receiver
+	// returns credit as it consumes MSGs. See "Flow control" in the README.
+	defaultInitialWindow int = 256 * 1024 // 256 KiB
 	// Subprotocol is the negotiated Sec-WebSocket-Protocol value.
 	Subprotocol string = "wsrpc.v1"
 )
@@ -38,6 +43,7 @@ type serverConfig struct {
 	keepalive        time.Duration
 	keepaliveTimeout time.Duration
 	receiveBuffer    int
+	initialWindow    int
 	compression      CompressionMode
 	connContext      func(ctx context.Context, r *http.Request) context.Context
 	middleware       []Middleware
@@ -76,6 +82,19 @@ func WithReceiveBuffer(n int) ServerOption {
 	}
 }
 
+// WithInitialWindow sets the per-stream credit window (bytes) for flow control.
+// A sender blocks in Send once a MSG would exceed the available send window and
+// resumes as the peer returns credit (KIND_WINDOW_UPDATE) by consuming MSGs.
+// Both peers must assume the same value (there is no handshake); n<=0 keeps the
+// default (256 KiB).
+func WithInitialWindow(n int) ServerOption {
+	return func(c *serverConfig) {
+		if n > 0 {
+			c.initialWindow = n
+		}
+	}
+}
+
 // WithConnContext lets handlers read the Upgrade HTTP request (auth headers, X-Forwarded-For)
 // by deriving the per-connection base context; values are visible via Stream.Context().
 func WithConnContext(fn func(ctx context.Context, r *http.Request) context.Context) ServerOption {
@@ -100,6 +119,7 @@ func defaultServerConfig() serverConfig {
 		keepalive:        defaultKeepalive,
 		keepaliveTimeout: defaultKeepaliveTimeout,
 		receiveBuffer:    defaultReceiveBuffer,
+		initialWindow:    defaultInitialWindow,
 	}
 }
 
@@ -109,6 +129,7 @@ type dialConfig struct {
 	keepalive        time.Duration
 	keepaliveTimeout time.Duration
 	receiveBuffer    int
+	initialWindow    int
 	compression      CompressionMode
 	reconnect        reconnectConfig
 }
@@ -144,6 +165,16 @@ func WithDialReceiveBuffer(n int) DialOption {
 	}
 }
 
+// WithDialInitialWindow sets the per-stream credit window (bytes) for flow
+// control on the client. See WithInitialWindow; n<=0 keeps the default (256 KiB).
+func WithDialInitialWindow(n int) DialOption {
+	return func(c *dialConfig) {
+		if n > 0 {
+			c.initialWindow = n
+		}
+	}
+}
+
 // WithDialCompression sets the permessage-deflate negotiation mode on the client.
 // Default CompressionDisabled.
 func WithDialCompression(m CompressionMode) DialOption {
@@ -156,5 +187,6 @@ func defaultDialConfig() dialConfig {
 		keepalive:        defaultKeepalive,
 		keepaliveTimeout: defaultKeepaliveTimeout,
 		receiveBuffer:    defaultReceiveBuffer,
+		initialWindow:    defaultInitialWindow,
 	}
 }
