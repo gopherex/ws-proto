@@ -21,6 +21,7 @@ enum Kind {
   KIND_HALF_CLOSE = 3;
   KIND_END = 4;
   KIND_RST = 5;
+  KIND_HEADER = 6;                  // server->client only: leading response metadata, at most once before any MSG
 }
 
 message Status {

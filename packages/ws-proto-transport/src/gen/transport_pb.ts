@@ -10,7 +10,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file transport.proto.
  */
 export const file_transport: GenFile = /*@__PURE__*/
-  fileDesc("Cg90cmFuc3BvcnQucHJvdG8SFHdzcHJvdG8udHJhbnNwb3J0LnYxIv4BCgVGcmFtZRIRCglzdHJlYW1faWQYASABKA0SKAoEa2luZBgCIAEoDjIaLndzcHJvdG8udHJhbnNwb3J0LnYxLktpbmQSOQoHaGVhZGVycxgDIAMoCzIoLndzcHJvdG8udHJhbnNwb3J0LnYxLkZyYW1lLkhlYWRlcnNFbnRyeRIPCgdwYXlsb2FkGAQgASgMEiwKBnN0YXR1cxgFIAEoCzIcLndzcHJvdG8udHJhbnNwb3J0LnYxLlN0YXR1cxIOCgZtZXRob2QYBiABKAkaLgoMSGVhZGVyc0VudHJ5EgsKA2tleRgBIAEoCRINCgV2YWx1ZRgCIAEoCToCOAEiOAoGU3RhdHVzEgwKBGNvZGUYASABKAUSDwoHbWVzc2FnZRgCIAEoCRIPCgdkZXRhaWxzGAMgAygMKmoKBEtpbmQSFAoQS0lORF9VTlNQRUNJRklFRBAAEg0KCUtJTkRfT1BFThABEgwKCEtJTkRfTVNHEAISEwoPS0lORF9IQUxGX0NMT1NFEAMSDAoIS0lORF9FTkQQBBIMCghLSU5EX1JTVBAFQjJaMGdpdGh1Yi5jb20vZ29waGVyZXgvd3MtcHJvdG8vdHJhbnNwb3J0O3RyYW5zcG9ydGIGcHJvdG8z");
+  fileDesc("Cg90cmFuc3BvcnQucHJvdG8SFHdzcHJvdG8udHJhbnNwb3J0LnYxIv4BCgVGcmFtZRIRCglzdHJlYW1faWQYASABKA0SKAoEa2luZBgCIAEoDjIaLndzcHJvdG8udHJhbnNwb3J0LnYxLktpbmQSOQoHaGVhZGVycxgDIAMoCzIoLndzcHJvdG8udHJhbnNwb3J0LnYxLkZyYW1lLkhlYWRlcnNFbnRyeRIPCgdwYXlsb2FkGAQgASgMEiwKBnN0YXR1cxgFIAEoCzIcLndzcHJvdG8udHJhbnNwb3J0LnYxLlN0YXR1cxIOCgZtZXRob2QYBiABKAkaLgoMSGVhZGVyc0VudHJ5EgsKA2tleRgBIAEoCRINCgV2YWx1ZRgCIAEoCToCOAEiOAoGU3RhdHVzEgwKBGNvZGUYASABKAUSDwoHbWVzc2FnZRgCIAEoCRIPCgdkZXRhaWxzGAMgAygMKnsKBEtpbmQSFAoQS0lORF9VTlNQRUNJRklFRBAAEg0KCUtJTkRfT1BFThABEgwKCEtJTkRfTVNHEAISEwoPS0lORF9IQUxGX0NMT1NFEAMSDAoIS0lORF9FTkQQBBIMCghLSU5EX1JTVBAFEg8KC0tJTkRfSEVBREVSEAZCMlowZ2l0aHViLmNvbS9nb3BoZXJleC93cy1wcm90by90cmFuc3BvcnQ7dHJhbnNwb3J0YgZwcm90bzM");
 
 /**
  * Frame is the single wire unit multiplexed over one WebSocket connection.
@@ -130,6 +130,13 @@ export enum Kind {
    * @generated from enum value: KIND_RST = 5;
    */
   RST = 5,
+
+  /**
+   * server->client only: leading response metadata, at most once before any MSG
+   *
+   * @generated from enum value: KIND_HEADER = 6;
+   */
+  HEADER = 6,
 }
 
 /**

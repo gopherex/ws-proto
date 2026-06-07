@@ -19,6 +19,7 @@ export const Kind = {
   KIND_HALF_CLOSE: GenKind.HALF_CLOSE,
   KIND_END: GenKind.END,
   KIND_RST: GenKind.RST,
+  KIND_HEADER: GenKind.HEADER,
 } as const;
 
 export type Kind = (typeof Kind)[keyof typeof Kind];

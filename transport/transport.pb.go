@@ -30,6 +30,7 @@ const (
 	Kind_KIND_HALF_CLOSE  Kind = 3
 	Kind_KIND_END         Kind = 4
 	Kind_KIND_RST         Kind = 5
+	Kind_KIND_HEADER      Kind = 6 // server->client only: leading response metadata, at most once before any MSG
 )
 
 // Enum value maps for Kind.
@@ -41,6 +42,7 @@ var (
 		3: "KIND_HALF_CLOSE",
 		4: "KIND_END",
 		5: "KIND_RST",
+		6: "KIND_HEADER",
 	}
 	Kind_value = map[string]int32{
 		"KIND_UNSPECIFIED": 0,
@@ -49,6 +51,7 @@ var (
 		"KIND_HALF_CLOSE":  3,
 		"KIND_END":         4,
 		"KIND_RST":         5,
+		"KIND_HEADER":      6,
 	}
 )
 
@@ -242,14 +245,15 @@ const file_transport_transport_proto_rawDesc = "" +
 	"\x06Status\x12\x12\n" +
 	"\x04code\x18\x01 \x01(\x05R\x04code\x12\x18\n" +
 	"\amessage\x18\x02 \x01(\tR\amessage\x12\x18\n" +
-	"\adetails\x18\x03 \x03(\fR\adetails*j\n" +
+	"\adetails\x18\x03 \x03(\fR\adetails*{\n" +
 	"\x04Kind\x12\x14\n" +
 	"\x10KIND_UNSPECIFIED\x10\x00\x12\r\n" +
 	"\tKIND_OPEN\x10\x01\x12\f\n" +
 	"\bKIND_MSG\x10\x02\x12\x13\n" +
 	"\x0fKIND_HALF_CLOSE\x10\x03\x12\f\n" +
 	"\bKIND_END\x10\x04\x12\f\n" +
-	"\bKIND_RST\x10\x05B2Z0github.com/gopherex/ws-proto/transport;transportb\x06proto3"
+	"\bKIND_RST\x10\x05\x12\x0f\n" +
+	"\vKIND_HEADER\x10\x06B2Z0github.com/gopherex/ws-proto/transport;transportb\x06proto3"
 
 var (
 	file_transport_transport_proto_rawDescOnce sync.Once
