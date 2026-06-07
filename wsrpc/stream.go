@@ -23,18 +23,24 @@ type Stream struct {
 	// ws-timeout-ms header (server side); nil when no per-stream deadline.
 	deadlineCancel context.CancelFunc
 
-	mu     sync.Mutex
-	header map[string]string // guarded by mu
-	endSt  *Status           // guarded by mu
+	mu       sync.Mutex
+	header   map[string]string // guarded by mu
+	endSt    *Status           // guarded by mu
+	endFrame *transport.Frame  // terminal END/RST frame; guarded by mu
 
-	recvCh     chan *transport.Frame // MSG/END/RST frames routed here by the mux
+	recvCh     chan *transport.Frame // bounded inbound MSG queue, routed by the mux
 	halfClosed chan struct{}         // closed once when peer half-closes (inbound)
+	ended      chan struct{}         // closed once when a terminal END/RST arrives
 
 	sendDone     bool // guarded by mu
 	halfCloseOne sync.Once
+	endOne       sync.Once
 }
 
-func newStream(ctx context.Context, mux *Mux, id uint32, method string) *Stream {
+func newStream(ctx context.Context, mux *Mux, id uint32, method string, recvBuffer int) *Stream {
+	if recvBuffer <= 0 {
+		recvBuffer = defaultReceiveBuffer
+	}
 	c, cancel := context.WithCancel(ctx)
 	return &Stream{
 		id:         id,
@@ -42,8 +48,9 @@ func newStream(ctx context.Context, mux *Mux, id uint32, method string) *Stream 
 		mux:        mux,
 		ctx:        c,
 		cancel:     cancel,
-		recvCh:     make(chan *transport.Frame, 16),
+		recvCh:     make(chan *transport.Frame, recvBuffer),
 		halfClosed: make(chan struct{}),
+		ended:      make(chan struct{}),
 	}
 }
 
@@ -76,26 +83,52 @@ func (s *Stream) Send(msg proto.Message) error {
 // Recv waits for the next MSG and unmarshals into msg. Returns io.EOF on a
 // clean END, or the *Status as error on a non-OK END / RST.
 func (s *Stream) Recv(msg proto.Message) error {
-	// Prefer any already-buffered frame so half-close never preempts pending MSGs.
+	// Prefer any already-buffered MSG so terminal/half-close signals never
+	// preempt pending data (drain-first).
 	select {
 	case f := <-s.recvCh:
-		return s.handleRecv(f, msg)
+		return proto.Unmarshal(f.Payload, msg)
 	default:
 	}
 	select {
 	case f := <-s.recvCh:
-		return s.handleRecv(f, msg)
+		return proto.Unmarshal(f.Payload, msg)
 	case <-s.halfClosed:
 		return io.EOF
+	case <-s.ended:
+		return s.recvEnded(msg)
 	case <-s.ctx.Done():
+		// A terminal frame may have closed ctx via failWith/applyEnd; surface a
+		// recorded END/RST in preference to the bare context error.
+		select {
+		case <-s.ended:
+			return s.recvEnded(msg)
+		default:
+		}
 		return s.ctx.Err()
 	}
 }
 
-func (s *Stream) handleRecv(f *transport.Frame, msg proto.Message) error {
-	switch f.Kind {
-	case transport.Kind_KIND_MSG:
+// recvEnded is entered once a terminal END/RST has been recorded. Any MSGs
+// still buffered are delivered first; only when the queue is empty is the
+// terminal status returned.
+func (s *Stream) recvEnded(msg proto.Message) error {
+	select {
+	case f := <-s.recvCh:
 		return proto.Unmarshal(f.Payload, msg)
+	default:
+	}
+	s.mu.Lock()
+	f := s.endFrame
+	s.mu.Unlock()
+	if f == nil {
+		// Terminal via failWith (no frame), e.g. connection drop / overflow.
+		if st := s.status(); st != nil && st.Code != codes.OK {
+			return st
+		}
+		return io.EOF
+	}
+	switch f.Kind {
 	case transport.Kind_KIND_END:
 		st := s.applyEnd(f)
 		if st.Code != codes.OK {
@@ -111,6 +144,12 @@ func (s *Stream) handleRecv(f *transport.Frame, msg proto.Message) error {
 	default:
 		return io.EOF
 	}
+}
+
+func (s *Stream) status() *Status {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.endSt
 }
 
 // CloseSend signals the client is done sending (HALF_CLOSE).
@@ -151,20 +190,40 @@ func (s *Stream) applyEnd(f *transport.Frame) *Status {
 	return st
 }
 
-// failWith is called by mux.failAll to signal an error on the stream.
+// failWith is called by mux.failAll / overflow handling to signal an error on
+// the stream. It records the status, wakes a blocked Recv via the terminal
+// signal (with no frame), and cancels the context.
 func (s *Stream) failWith(err error) {
 	s.mu.Lock()
 	s.endSt = FromError(err)
 	s.mu.Unlock()
+	s.endOne.Do(func() { close(s.ended) }) // terminal, frameless
 	s.cancel()
 }
 
-// deliver routes an inbound frame into the stream (called by the mux).
-func (s *Stream) deliver(f *transport.Frame) {
+// tryDeliver enqueues a MSG frame without ever blocking the read loop. It
+// returns false only when the bounded buffer is full (the consumer is too
+// slow), which the mux turns into a stream reset.
+func (s *Stream) tryDeliver(f *transport.Frame) bool {
 	select {
 	case s.recvCh <- f:
+		return true
 	case <-s.ctx.Done():
+		return true // stream already ending; dropping the frame is fine
+	default:
+		return false
 	}
+}
+
+// signalEnd records a terminal END/RST frame and wakes Recv, without consuming
+// any space in the bounded MSG queue.
+func (s *Stream) signalEnd(f *transport.Frame) {
+	s.endOne.Do(func() {
+		s.mu.Lock()
+		s.endFrame = f
+		s.mu.Unlock()
+		close(s.ended)
+	})
 }
 
 // halfClose signals the peer finished sending; a blocked Recv returns io.EOF

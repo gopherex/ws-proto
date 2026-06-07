@@ -10,6 +10,10 @@ const (
 	defaultReadLimit        int64         = 16 << 20 // 16 MiB
 	defaultKeepalive        time.Duration = 20 * time.Second
 	defaultKeepaliveTimeout time.Duration = 10 * time.Second
+	// defaultReceiveBuffer bounds the per-stream inbound MSG queue. A slow
+	// consumer that fills this buffer is reset rather than blocking the shared
+	// read loop (head-of-line blocking / memory safety valve).
+	defaultReceiveBuffer int = 256
 	// Subprotocol is the negotiated Sec-WebSocket-Protocol value.
 	Subprotocol string = "wsrpc.v1"
 )
@@ -19,6 +23,7 @@ type serverConfig struct {
 	readLimit        int64
 	keepalive        time.Duration
 	keepaliveTimeout time.Duration
+	receiveBuffer    int
 	connContext      func(ctx context.Context, r *http.Request) context.Context
 	middleware       []Middleware
 }
@@ -44,6 +49,18 @@ func WithReadLimit(n int64) ServerOption {
 	return func(c *serverConfig) { c.readLimit = n }
 }
 
+// WithReceiveBuffer bounds the per-stream inbound MSG queue. When a consumer is
+// too slow and the buffer fills, that stream is reset (codes.ResourceExhausted)
+// instead of blocking delivery to other streams on the connection. n<=0 keeps
+// the default.
+func WithReceiveBuffer(n int) ServerOption {
+	return func(c *serverConfig) {
+		if n > 0 {
+			c.receiveBuffer = n
+		}
+	}
+}
+
 // WithConnContext lets handlers read the Upgrade HTTP request (auth headers, X-Forwarded-For)
 // by deriving the per-connection base context; values are visible via Stream.Context().
 func WithConnContext(fn func(ctx context.Context, r *http.Request) context.Context) ServerOption {
@@ -61,6 +78,7 @@ func defaultServerConfig() serverConfig {
 		readLimit:        defaultReadLimit,
 		keepalive:        defaultKeepalive,
 		keepaliveTimeout: defaultKeepaliveTimeout,
+		receiveBuffer:    defaultReceiveBuffer,
 	}
 }
 
@@ -69,6 +87,7 @@ type dialConfig struct {
 	readLimit        int64
 	keepalive        time.Duration
 	keepaliveTimeout time.Duration
+	receiveBuffer    int
 }
 
 // DialOption configures a client Dial.
@@ -92,10 +111,21 @@ func WithDialReadLimit(n int64) DialOption {
 	return func(c *dialConfig) { c.readLimit = n }
 }
 
+// WithDialReceiveBuffer bounds the per-stream inbound MSG queue on the client.
+// See WithReceiveBuffer. n<=0 keeps the default.
+func WithDialReceiveBuffer(n int) DialOption {
+	return func(c *dialConfig) {
+		if n > 0 {
+			c.receiveBuffer = n
+		}
+	}
+}
+
 func defaultDialConfig() dialConfig {
 	return dialConfig{
 		readLimit:        defaultReadLimit,
 		keepalive:        defaultKeepalive,
 		keepaliveTimeout: defaultKeepaliveTimeout,
+		receiveBuffer:    defaultReceiveBuffer,
 	}
 }

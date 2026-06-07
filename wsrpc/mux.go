@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/gopherex/ws-proto/transport"
+	"google.golang.org/grpc/codes"
 )
 
 // timeoutHeader carries the caller's remaining deadline (decimal milliseconds)
@@ -28,18 +29,28 @@ type Mux struct {
 
 	onOpen func(*Stream) // server-side dispatch; nil on client
 
+	recvBuffer int // per-stream inbound MSG queue capacity
+
 	writeMu sync.Mutex // serialize frame writes
 }
 
 func newMux(ctx context.Context, conn frameConn, onOpen func(*Stream)) *Mux {
+	return newMuxBuffered(ctx, conn, onOpen, defaultReceiveBuffer)
+}
+
+func newMuxBuffered(ctx context.Context, conn frameConn, onOpen func(*Stream), recvBuffer int) *Mux {
+	if recvBuffer <= 0 {
+		recvBuffer = defaultReceiveBuffer
+	}
 	c, cancel := context.WithCancel(ctx)
 	m := &Mux{
-		conn:    conn,
-		ctx:     c,
-		cancel:  cancel,
-		nextID:  1,
-		streams: make(map[uint32]*Stream),
-		onOpen:  onOpen,
+		conn:       conn,
+		ctx:        c,
+		cancel:     cancel,
+		nextID:     1,
+		streams:    make(map[uint32]*Stream),
+		onOpen:     onOpen,
+		recvBuffer: recvBuffer,
 	}
 	go m.readLoop()
 	return m
@@ -95,7 +106,7 @@ func (m *Mux) newClientStream(ctx context.Context, method string, headers map[st
 		}
 	}
 	id := atomic.AddUint32(&m.nextID, 2) - 2 // 1,3,5,...
-	s := newStream(ctx, m, id, method)
+	s := newStream(ctx, m, id, method, m.recvBuffer)
 	m.mu.Lock()
 	m.streams[id] = s
 	m.mu.Unlock()
@@ -143,7 +154,7 @@ func (m *Mux) route(f *transport.Frame) {
 				sctx, dcancel = context.WithTimeout(m.ctx, time.Duration(ms)*time.Millisecond)
 			}
 		}
-		s := newStream(sctx, m, f.StreamId, f.Method)
+		s := newStream(sctx, m, f.StreamId, f.Method, m.recvBuffer)
 		s.deadlineCancel = dcancel
 		s.header = f.Headers
 		m.mu.Lock()
@@ -159,13 +170,34 @@ func (m *Mux) route(f *transport.Frame) {
 	if s == nil {
 		return
 	}
-	if f.Kind == transport.Kind_KIND_HALF_CLOSE {
+	switch f.Kind {
+	case transport.Kind_KIND_HALF_CLOSE:
 		s.halfClose()
 		return
-	}
-	s.deliver(f)
-	if f.Kind == transport.Kind_KIND_END || f.Kind == transport.Kind_KIND_RST {
+	case transport.Kind_KIND_END, transport.Kind_KIND_RST:
+		// Terminal frames bypass the bounded MSG queue entirely so a slow
+		// consumer can never lose or stall an END/RST. Recv drains buffered
+		// MSGs first, then observes this terminal frame.
+		s.signalEnd(f)
 		m.remove(f.StreamId)
+		return
+	default: // KIND_MSG
+		if !s.tryDeliver(f) {
+			// Consumer too slow: the bounded receive buffer overflowed. Reset
+			// the stream locally and tell the peer to stop. The read loop must
+			// never block, so we drop this stream and move on to the others.
+			s.failWith(Errorf(codes.ResourceExhausted, "wsrpc: receive buffer overflow"))
+			_ = m.write(m.ctx, &transport.Frame{
+				StreamId: f.StreamId,
+				Kind:     transport.Kind_KIND_RST,
+				Status: statusToProto(&Status{
+					Code:    codes.ResourceExhausted,
+					Message: "receive buffer overflow",
+				}),
+			})
+			m.remove(f.StreamId)
+			return
+		}
 	}
 }
 

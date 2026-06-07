@@ -25,7 +25,7 @@ func Dial(ctx context.Context, url string, opts ...DialOption) (*ClientConn, err
 		return nil, err
 	}
 	conn := newWSConn(c, cfg.readLimit)
-	mux := newMux(ctx, conn, nil)
+	mux := newMuxBuffered(ctx, conn, nil, cfg.receiveBuffer)
 	mux.startKeepalive(cfg.keepalive, cfg.keepaliveTimeout)
 	return &ClientConn{mux: mux}, nil
 }
