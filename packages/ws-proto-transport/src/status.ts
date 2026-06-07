@@ -25,6 +25,12 @@ export const CODE_OK = 0;
 export const CODE_CANCELLED = 1;
 /** gRPC-style "DEADLINE_EXCEEDED" status code (used when a call timeout fires). */
 export const CODE_DEADLINE_EXCEEDED = 4;
+/**
+ * gRPC-style "RESOURCE_EXHAUSTED" status code. Surfaced when a stream's bounded
+ * inbound receive queue overflows because the consumer is too slow; the stream
+ * is reset rather than letting the backlog grow unbounded.
+ */
+export const CODE_RESOURCE_EXHAUSTED = 8;
 
 /**
  * statusErrorFromProto converts a decoded END Status into a WsStatusError, or

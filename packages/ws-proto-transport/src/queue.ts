@@ -10,9 +10,11 @@
  *              by subsequent pulls first; once drained, pulls reject with `e`.
  *              Any pull already waiting (queue empty) rejects immediately.
  *
- * Backpressure: v1 is intentionally UNBOUNDED. A slow consumer cannot slow a
- * fast producer; memory grows with the backlog. Credit-based per-stream flow
- * control is a documented future extension (see transport design spec).
+ * Backpressure: the queue itself does not block a producer, but the mux bounds
+ * the buffered backlog per stream (maxReceiveQueue). When the backlog would
+ * exceed that bound the mux resets the stream (CODE_RESOURCE_EXHAUSTED) instead
+ * of letting memory grow without limit. Credit-based per-stream flow control is
+ * a documented future extension (see transport design spec).
  */
 export interface PullResult<T> {
   done: boolean;
@@ -29,6 +31,11 @@ export class AsyncQueue<T> {
   private readonly waiters: Waiter<T>[] = [];
   private ended = false;
   private error: unknown = undefined;
+
+  /** size returns the number of buffered (not-yet-pulled) values. */
+  size(): number {
+    return this.values.length;
+  }
 
   push(value: T): void {
     if (this.ended || this.error !== undefined) {

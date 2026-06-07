@@ -5,8 +5,16 @@ import {
   statusErrorFromProto,
   CODE_CANCELLED,
   CODE_DEADLINE_EXCEEDED,
+  CODE_RESOURCE_EXHAUSTED,
   abortError,
 } from "./status.js";
+
+/**
+ * DEFAULT_MAX_RECEIVE_QUEUE bounds the per-stream inbound MSG backlog. A slower
+ * consumer that lets its queue exceed this is reset (CODE_RESOURCE_EXHAUSTED)
+ * rather than buffering without limit.
+ */
+export const DEFAULT_MAX_RECEIVE_QUEUE = 256;
 
 /**
  * StreamInit configures a new RPC stream opened via openStream: request
@@ -53,14 +61,16 @@ export class Mux {
   private readonly ws: WebSocketLike;
   private readonly streams = new Map<number, StreamImpl>();
   private nextId = 1;
+  private readonly maxReceiveQueue: number;
 
   /** Frames produced before the socket reaches OPEN are buffered here. */
   private readonly sendBuffer: Uint8Array[] = [];
   private open = false;
   private closed = false;
 
-  constructor(ws: WebSocketLike) {
+  constructor(ws: WebSocketLike, maxReceiveQueue: number = DEFAULT_MAX_RECEIVE_QUEUE) {
     this.ws = ws;
+    this.maxReceiveQueue = maxReceiveQueue > 0 ? maxReceiveQueue : DEFAULT_MAX_RECEIVE_QUEUE;
     this.ws.binaryType = "arraybuffer";
 
     // If the socket is already open (e.g. fromSocket on a live socket), flush.
@@ -161,9 +171,19 @@ export class Mux {
 
       case Kind.KIND_MSG: {
         const s = this.streams.get(frame.streamId);
-        if (s) {
-          s.pushMsg(frame.payload);
+        if (!s) {
+          return;
         }
+        // Bound the per-stream backlog: a consumer too slow to keep its queue
+        // under maxReceiveQueue is reset rather than buffering without limit.
+        // abort() rejects pending recv()/iteration with the error and, via its
+        // reset hook, both writes an RST to the peer and detaches the stream.
+        if (s.queuedCount() >= this.maxReceiveQueue) {
+          s.abort(new WsStatusError(CODE_RESOURCE_EXHAUSTED, "receive buffer overflow"));
+          this.streams.delete(frame.streamId); // idempotent; abort already detached
+          return;
+        }
+        s.pushMsg(frame.payload);
         return;
       }
 

@@ -180,6 +180,14 @@ export class StreamImpl implements ClientStream {
     this.inbound.push(payload);
   }
 
+  /**
+   * queuedCount reports how many inbound MSG payloads are buffered awaiting a
+   * recv(). The mux uses it to enforce the bounded receive queue.
+   */
+  queuedCount(): number {
+    return this.inbound.size();
+  }
+
   /** endOk is called by the mux on a clean END (status OK). Resolves recv()/iter to done. */
   endOk(headers: Record<string, string>): void {
     if (this.finished) {
