@@ -207,6 +207,8 @@ const res = await client.unary(
     headers: { authorization: "bearer …" },
     // cancellation: aborting sends RST; the call rejects with a WsStatusError
     signal: controller.signal,
+    // optional leading response headers, sent before the first message
+    onHeader: (header) => console.log(header["x-served-by"]),
     // response trailers, reported once the server ends the stream
     onTrailer: (trailer) => console.log(trailer["x-elapsed-ms"]),
   },
@@ -216,9 +218,11 @@ const res = await client.unary(
 controller.abort();
 ```
 
-`CallOptions` (`headers`, `signal`, `onTrailer`) is generated into each
-`*_ws_pb.ts` and accepted by all four RPC kinds. For streaming methods,
-`onTrailer` fires after the response stream completes cleanly.
+`CallOptions` (`headers`, `signal`, `onHeader`, `onTrailer`) is generated into
+each `*_ws_pb.ts` and accepted by all four RPC kinds. `onHeader` fires with the
+optional **leading** response metadata the server may send before the first
+message (or `{}` if none was sent); `onTrailer` fires with the END trailers
+after the response stream completes cleanly.
 
 In Node, provide a `WebSocket` global (e.g. the [`ws`](https://www.npmjs.com/package/ws)
 package) before constructing the transport.
@@ -258,6 +262,25 @@ func Auth(next wsrpc.Handler) wsrpc.Handler {
 srv := wsrpc.NewServer(wsrpc.WithMiddleware(Logging, Auth)) // Logging outermost
 ```
 
+### Response headers & trailers (Go)
+
+A server handler may send **leading** response metadata once, before the first
+message, with `stream.SendHeader(map[string]string{...})`, and **trailers**
+(flushed with the `END` frame) with `stream.SetTrailer(map[string]string{...})`:
+
+```go
+func (impl) ServerStream(ctx context.Context, req *pb.Req, s *pb.Svc_StreamServerWS) error {
+    _ = s.SendHeader(map[string]string{"x-served-by": "node-1"}) // before any Send
+    defer s.SetTrailer(map[string]string{"x-elapsed-ms": "12"})
+    return s.Send(&pb.Res{ /* … */ })
+}
+```
+
+On the client, the leading headers are read with `stream.Header()` (returns `{}`
+if the server sent none) and the trailers with `stream.Trailer()` (populated
+once the stream ends). `SendHeader` after the first `Send` returns
+`codes.FailedPrecondition`.
+
 ### Reusing existing gRPC interceptors via the bridge
 
 When you serve an existing protoc-gen-go-grpc server through the bridge, you can
@@ -284,12 +307,14 @@ echov1.RegisterEchoServiceHandler(srv, handler)
 The bridge mirrors grpc-go's own handler/interceptor flow (a generic
 `grpc.ServerStream` adapter wrapped in `grpc.GenericServerStream[Req,Res]`), so
 `info.FullMethod` is the real `/pkg.Service/Method` and interceptor chaining
-works as in a normal gRPC server. **Limitations:** response metadata set via
-`grpc.SetHeader`/`SendHeader`/`SetTrailer` is not propagated (wsrpc has no
-metadata channel mapped onto the wire yet), and a stream interceptor that wraps
-the `ServerStream` must delegate `SendMsg`/`RecvMsg` to the embedded stream
-(the idiomatic pattern). Use `wsrpc.WithConnContext` to read auth off the
-proxy-visible Upgrade request instead of response metadata.
+works as in a normal gRPC server. **Streaming response metadata** set on the
+`grpc.ServerStream` via `SetHeader`/`SendHeader`/`SetTrailer` **is** propagated:
+leading headers become a `KIND_HEADER` frame and trailers ride the `END` frame.
+**Limitations:** unary interceptor header metadata set via
+`grpc.SetHeader`/`SendHeader` (which reads from `ctx`, with no `ServerStream` on
+the unary path) is still not propagated, and a stream interceptor that wraps the
+`ServerStream` must delegate `SendMsg`/`RecvMsg` to the embedded stream (the
+idiomatic pattern).
 
 ---
 
