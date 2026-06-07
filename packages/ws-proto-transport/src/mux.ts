@@ -169,6 +169,17 @@ export class Mux {
         // Server never opens streams in this protocol; ignore.
         return;
 
+      case Kind.KIND_HEADER: {
+        // Leading response metadata (server->client only). It is not terminal
+        // and does not enqueue as a MSG; it resolves responseLeadingHeaders().
+        const s = this.streams.get(frame.streamId);
+        if (!s) {
+          return;
+        }
+        s.setLeadingHeaders(frame.headers);
+        return;
+      }
+
       case Kind.KIND_MSG: {
         const s = this.streams.get(frame.streamId);
         if (!s) {

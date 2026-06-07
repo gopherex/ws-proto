@@ -350,4 +350,45 @@ describe("WsTransport subprotocol negotiation", () => {
   it("SUBPROTOCOL constant equals 'wsrpc.v1'", () => {
     expect(SUBPROTOCOL).toBe("wsrpc.v1");
   });
+
+  it("leading KIND_HEADER resolves responseLeadingHeaders; END resolves trailers", async () => {
+    const sock = new FakeSocket();
+    const t = WsTransport.fromSocket(sock);
+    const s = t.openStream("/s/H");
+    s.closeSend();
+    await tick();
+
+    sock.inject({
+      streamId: 1,
+      kind: Kind.KIND_HEADER,
+      headers: { "x-hdr": "1" },
+    });
+    sock.inject({ streamId: 1, kind: Kind.KIND_MSG, payload: new Uint8Array([7]) });
+    sock.inject({
+      streamId: 1,
+      kind: Kind.KIND_END,
+      status: { code: 0 },
+      headers: { "x-tlr": "2" },
+    });
+
+    expect(await s.responseLeadingHeaders()).toEqual({ "x-hdr": "1" });
+    expect((await s.recv())![0]).toBe(7);
+    expect(await s.recv()).toBeNull();
+    expect(await s.responseHeaders()).toEqual({ "x-tlr": "2" });
+  });
+
+  it("responseLeadingHeaders resolves to {} promptly when no header frame is sent", async () => {
+    const sock = new FakeSocket();
+    const t = WsTransport.fromSocket(sock);
+    const s = t.openStream("/s/NH");
+    s.closeSend();
+    await tick();
+
+    sock.inject({ streamId: 1, kind: Kind.KIND_MSG, payload: new Uint8Array([9]) });
+    sock.inject({ streamId: 1, kind: Kind.KIND_END, status: { code: 0 } });
+
+    expect(await s.responseLeadingHeaders()).toEqual({});
+    expect((await s.recv())![0]).toBe(9);
+    expect(await s.recv()).toBeNull();
+  });
 });

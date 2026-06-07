@@ -26,6 +26,13 @@ export interface ClientStream {
    */
   responseHeaders(): Promise<Record<string, string>>;
   /**
+   * responseLeadingHeaders resolves with the optional leading response metadata
+   * the server may send on a KIND_HEADER frame before the first message. If no
+   * such frame is sent, it resolves with `{}` as soon as the first MSG or END
+   * arrives, so it always settles promptly.
+   */
+  responseLeadingHeaders(): Promise<Record<string, string>>;
+  /**
    * Async iteration yields each response MSG payload until clean END; throws on
    * error END/RST. Breaking out early (the iterator's return()) cancels the RPC
    * via RST so the stream detaches and the server stops producing.
@@ -63,6 +70,10 @@ export class StreamImpl implements ClientStream {
   private readonly headersPromise: Promise<Record<string, string>>;
   private headersSettled = false;
 
+  private leadingResolve!: (h: Record<string, string>) => void;
+  private readonly leadingPromise: Promise<Record<string, string>>;
+  private leadingSettled = false;
+
   constructor(id: number, hooks: StreamHooks) {
     this.id = id;
     this.hooks = hooks;
@@ -70,6 +81,11 @@ export class StreamImpl implements ClientStream {
     // delivered through recv()/iteration, so there is no rejection path.
     this.headersPromise = new Promise<Record<string, string>>((resolve) => {
       this.headersResolve = resolve;
+    });
+    // leadingPromise resolves with the KIND_HEADER metadata, or with {} once the
+    // first MSG/END arrives if the server never sent a leading header.
+    this.leadingPromise = new Promise<Record<string, string>>((resolve) => {
+      this.leadingResolve = resolve;
     });
   }
 
@@ -98,6 +114,10 @@ export class StreamImpl implements ClientStream {
 
   responseHeaders(): Promise<Record<string, string>> {
     return this.headersPromise;
+  }
+
+  responseLeadingHeaders(): Promise<Record<string, string>> {
+    return this.leadingPromise;
   }
 
   [Symbol.asyncIterator](): AsyncIterator<Uint8Array> {
@@ -175,8 +195,18 @@ export class StreamImpl implements ClientStream {
 
   // ---- mux-facing callbacks (not part of the public ClientStream surface) ----
 
+  /**
+   * setLeadingHeaders is called by the mux for an inbound KIND_HEADER frame
+   * (leading response metadata). It resolves responseLeadingHeaders() once.
+   */
+  setLeadingHeaders(headers: Record<string, string>): void {
+    this.resolveLeading(headers);
+  }
+
   /** pushMsg is called by the mux for each inbound MSG frame. */
   pushMsg(payload: Uint8Array): void {
+    // The first message guarantees no leading header is coming; settle to {}.
+    this.resolveLeading({});
     this.inbound.push(payload);
   }
 
@@ -215,11 +245,21 @@ export class StreamImpl implements ClientStream {
   }
 
   private resolveHeaders(headers: Record<string, string>): void {
+    // Any terminal path also guarantees no (further) leading header is coming.
+    this.resolveLeading({});
     if (this.headersSettled) {
       return;
     }
     this.headersSettled = true;
     this.headers = headers;
     this.headersResolve(headers);
+  }
+
+  private resolveLeading(headers: Record<string, string>): void {
+    if (this.leadingSettled) {
+      return;
+    }
+    this.leadingSettled = true;
+    this.leadingResolve(headers);
   }
 }
