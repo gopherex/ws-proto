@@ -16,7 +16,6 @@ import { create } from "@bufbuild/protobuf";
 import type { GenMessage } from "@bufbuild/protobuf/codegenv2";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const pkgRoot = resolve(here, ".."); // packages/protoc-gen-ws-es
 const repoRoot = resolve(here, "..", "..", ".."); // packages/protoc-gen-ws-es -> repo root
 
 // Generated symbols are loaded dynamically in beforeAll, after we (re)generate
@@ -52,12 +51,7 @@ function waitForListening(proc: ChildProcessWithoutNullStreams): Promise<void> {
 }
 
 beforeAll(async () => {
-  // Ensure the generated client/messages exist (the unit-test file may have
-  // cleaned test/gen; generation is idempotent), then load them dynamically.
-  execFileSync("npx", ["buf", "generate", "--template", "test/buf.gen.test.yaml"], {
-    cwd: pkgRoot,
-    stdio: "inherit",
-  });
+  // The client/messages are generated once by the vitest globalSetup; load them.
   ({ EchoServiceClient } = await import("./gen/echo_ws_pb.js"));
   ({
     UnaryRequestSchema,

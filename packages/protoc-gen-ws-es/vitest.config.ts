@@ -5,8 +5,10 @@ export default defineConfig({
     include: ["test/**/*.test.ts"],
     testTimeout: 30000,
     hookTimeout: 60000,
-    // Run test files sequentially: both the generation unit test and the
-    // integration test regenerate into test/gen, so they must not race.
+    // Generate the test client SDK once, before any test file runs, so files
+    // that import test/gen don't depend on alphabetical file order.
+    globalSetup: ["./test/global-setup.ts"],
+    // Keep files sequential: the integration test binds a fixed port.
     fileParallelism: false,
   },
 });

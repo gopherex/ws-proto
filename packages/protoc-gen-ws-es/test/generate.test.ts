@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll } from "vitest";
+import { describe, it, expect } from "vitest";
 import { execFileSync } from "node:child_process";
 import { readFileSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -13,13 +13,7 @@ function run(cmd: string, args: string[]): void {
 }
 
 describe("protoc-gen-ws-es generation", () => {
-  beforeAll(() => {
-    run("npm", ["run", "build"]);
-    // buf must see the built plugin bin as executable. Generation is idempotent
-    // (buf overwrites), so we do not delete test/gen here — that would race the
-    // integration test file, which runs in the same vitest invocation.
-    run("npx", ["buf", "generate", "--template", "test/buf.gen.test.yaml"]);
-  });
+  // The SDK is generated once by the vitest globalSetup; these tests assert it.
 
   it("emits the sibling _ws_pb.ts", () => {
     expect(existsSync(genFile)).toBe(true);
