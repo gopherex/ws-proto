@@ -32,6 +32,11 @@ type Mux struct {
 	recvBuffer int // per-stream inbound MSG queue capacity
 
 	writeMu sync.Mutex // serialize frame writes
+
+	// closed records a deliberate user Close so the conn-loss path can
+	// distinguish an intentional shutdown (codes.Canceled, "transport closed")
+	// from a transport disconnect (codes.Unavailable, "wsrpc: connection lost").
+	closedFlag atomic.Bool
 }
 
 func newMux(ctx context.Context, conn frameConn, onOpen func(*Stream)) *Mux {
@@ -133,11 +138,23 @@ func (m *Mux) readLoop() {
 	for {
 		f, err := m.conn.ReadFrame(m.ctx)
 		if err != nil {
-			m.failAll(err)
+			m.failAll(m.disconnectErr())
 			return
 		}
 		m.route(f)
 	}
+}
+
+// disconnectErr maps a read-loop termination to a stream status. A deliberate
+// user Close surfaces codes.Canceled ("transport closed"); any other
+// termination (websocket close, read error, keepalive failure) is a transport
+// disconnect and surfaces codes.Unavailable ("wsrpc: connection lost"), which
+// callers are expected to retry.
+func (m *Mux) disconnectErr() error {
+	if m.closedFlag.Load() {
+		return Errorf(codes.Canceled, "wsrpc: transport closed")
+	}
+	return Errorf(codes.Unavailable, "wsrpc: connection lost")
 }
 
 func (m *Mux) route(f *transport.Frame) {
@@ -218,8 +235,11 @@ func (m *Mux) failAll(err error) {
 	m.mu.Unlock()
 }
 
-// Close shuts the mux and underlying conn.
+// Close shuts the mux and underlying conn. It marks the mux as deliberately
+// closed so in-flight streams fail with codes.Canceled ("transport closed")
+// rather than the codes.Unavailable mapping used for transport disconnects.
 func (m *Mux) Close() error {
+	m.closedFlag.Store(true)
 	m.cancel()
 	return m.conn.Close()
 }

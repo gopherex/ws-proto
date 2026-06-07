@@ -110,6 +110,7 @@ type dialConfig struct {
 	keepaliveTimeout time.Duration
 	receiveBuffer    int
 	compression      CompressionMode
+	reconnect        reconnectConfig
 }
 
 // DialOption configures a client Dial.
