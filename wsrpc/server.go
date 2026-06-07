@@ -60,6 +60,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) serveStream(stream *Stream) {
 	defer stream.mux.remove(stream.id)
+	if stream.deadlineCancel != nil {
+		defer stream.deadlineCancel()
+	}
 	// Recover panics from handlers, middleware, or gRPC interceptors so one bad
 	// RPC ends with codes.Internal instead of taking down the whole process.
 	defer func() {

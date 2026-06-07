@@ -118,10 +118,10 @@ func RegisterEchoServiceHandler(srv *wsrpc.Server, impl EchoServiceHandler) {
 
 // EchoServiceWSClient is the client API for the EchoService service.
 type EchoServiceWSClient interface {
-	Unary(ctx context.Context, req *UnaryRequest) (*UnaryResponse, error)
-	ServerStream(ctx context.Context, req *ServerStreamRequest) (*EchoService_ServerStreamClientWS, error)
-	ClientStream(ctx context.Context) (*EchoService_ClientStreamClientWS, error)
-	Bidi(ctx context.Context) (*EchoService_BidiClientWS, error)
+	Unary(ctx context.Context, req *UnaryRequest, opts ...wsrpc.CallOption) (*UnaryResponse, error)
+	ServerStream(ctx context.Context, req *ServerStreamRequest, opts ...wsrpc.CallOption) (*EchoService_ServerStreamClientWS, error)
+	ClientStream(ctx context.Context, opts ...wsrpc.CallOption) (*EchoService_ClientStreamClientWS, error)
+	Bidi(ctx context.Context, opts ...wsrpc.CallOption) (*EchoService_BidiClientWS, error)
 }
 
 type echoServiceWSClient struct {
@@ -203,8 +203,9 @@ func (x *EchoService_BidiClientWS) CloseSend() error {
 	return x.stream.CloseSend()
 }
 
-func (c *echoServiceWSClient) Unary(ctx context.Context, req *UnaryRequest) (*UnaryResponse, error) {
-	s, err := c.cc.NewStream(ctx, "/echo.v1.EchoService/Unary", nil)
+func (c *echoServiceWSClient) Unary(ctx context.Context, req *UnaryRequest, opts ...wsrpc.CallOption) (*UnaryResponse, error) {
+	headers := wsrpc.CallHeaders(opts...)
+	s, err := c.cc.NewStream(ctx, "/echo.v1.EchoService/Unary", headers)
 	if err != nil {
 		return nil, err
 	}
@@ -224,8 +225,9 @@ func (c *echoServiceWSClient) Unary(ctx context.Context, req *UnaryRequest) (*Un
 	return res, nil
 }
 
-func (c *echoServiceWSClient) ServerStream(ctx context.Context, req *ServerStreamRequest) (*EchoService_ServerStreamClientWS, error) {
-	s, err := c.cc.NewStream(ctx, "/echo.v1.EchoService/ServerStream", nil)
+func (c *echoServiceWSClient) ServerStream(ctx context.Context, req *ServerStreamRequest, opts ...wsrpc.CallOption) (*EchoService_ServerStreamClientWS, error) {
+	headers := wsrpc.CallHeaders(opts...)
+	s, err := c.cc.NewStream(ctx, "/echo.v1.EchoService/ServerStream", headers)
 	if err != nil {
 		return nil, err
 	}
@@ -238,16 +240,18 @@ func (c *echoServiceWSClient) ServerStream(ctx context.Context, req *ServerStrea
 	return &EchoService_ServerStreamClientWS{stream: s}, nil
 }
 
-func (c *echoServiceWSClient) ClientStream(ctx context.Context) (*EchoService_ClientStreamClientWS, error) {
-	s, err := c.cc.NewStream(ctx, "/echo.v1.EchoService/ClientStream", nil)
+func (c *echoServiceWSClient) ClientStream(ctx context.Context, opts ...wsrpc.CallOption) (*EchoService_ClientStreamClientWS, error) {
+	headers := wsrpc.CallHeaders(opts...)
+	s, err := c.cc.NewStream(ctx, "/echo.v1.EchoService/ClientStream", headers)
 	if err != nil {
 		return nil, err
 	}
 	return &EchoService_ClientStreamClientWS{stream: s}, nil
 }
 
-func (c *echoServiceWSClient) Bidi(ctx context.Context) (*EchoService_BidiClientWS, error) {
-	s, err := c.cc.NewStream(ctx, "/echo.v1.EchoService/Bidi", nil)
+func (c *echoServiceWSClient) Bidi(ctx context.Context, opts ...wsrpc.CallOption) (*EchoService_BidiClientWS, error) {
+	headers := wsrpc.CallHeaders(opts...)
+	s, err := c.cc.NewStream(ctx, "/echo.v1.EchoService/Bidi", headers)
 	if err != nil {
 		return nil, err
 	}

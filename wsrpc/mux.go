@@ -2,12 +2,17 @@ package wsrpc
 
 import (
 	"context"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/gopherex/ws-proto/transport"
 )
+
+// timeoutHeader carries the caller's remaining deadline (decimal milliseconds)
+// on the OPEN frame so the server can derive a per-stream context deadline.
+const timeoutHeader = "ws-timeout-ms"
 
 // Mux multiplexes streams over one frameConn. Used by both client and server;
 // onOpen is nil on the client and set on the server to dispatch new streams.
@@ -76,6 +81,19 @@ func (m *Mux) write(ctx context.Context, f *transport.Frame) error {
 
 // newClientStream allocates an id, registers the stream, and sends OPEN.
 func (m *Mux) newClientStream(ctx context.Context, method string, headers map[string]string) (*Stream, error) {
+	// Propagate the caller's deadline as a ws-timeout-ms header so the server
+	// can derive a matching per-stream context deadline.
+	if d, ok := ctx.Deadline(); ok {
+		if ms := time.Until(d).Milliseconds(); ms > 0 {
+			// Copy the caller's map (or allocate) so we never mutate it.
+			h := make(map[string]string, len(headers)+1)
+			for k, v := range headers {
+				h[k] = v
+			}
+			h[timeoutHeader] = strconv.FormatInt(ms, 10)
+			headers = h
+		}
+	}
 	id := atomic.AddUint32(&m.nextID, 2) - 2 // 1,3,5,...
 	s := newStream(ctx, m, id, method)
 	m.mu.Lock()
@@ -116,7 +134,17 @@ func (m *Mux) route(f *transport.Frame) {
 		if m.onOpen == nil {
 			return // clients ignore OPEN
 		}
-		s := newStream(m.ctx, m, f.StreamId, f.Method)
+		// Honor a caller-supplied deadline (ws-timeout-ms) by deriving the
+		// stream context with that timeout; otherwise inherit the mux context.
+		sctx := m.ctx
+		var dcancel context.CancelFunc
+		if v := f.Headers[timeoutHeader]; v != "" {
+			if ms, err := strconv.ParseInt(v, 10, 64); err == nil && ms > 0 {
+				sctx, dcancel = context.WithTimeout(m.ctx, time.Duration(ms)*time.Millisecond)
+			}
+		}
+		s := newStream(sctx, m, f.StreamId, f.Method)
+		s.deadlineCancel = dcancel
 		s.header = f.Headers
 		m.mu.Lock()
 		m.streams[f.StreamId] = s

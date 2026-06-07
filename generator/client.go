@@ -5,6 +5,7 @@ import "google.golang.org/protobuf/compiler/protogen"
 func (g *Generator) genClient(gf *protogen.GeneratedFile, svc *protogen.Service) {
 	ctx := gf.QualifiedGoIdent(contextImport.Ident("Context"))
 	ccType := gf.QualifiedGoIdent(wsrpcImport.Ident("ClientConn"))
+	callOpt := gf.QualifiedGoIdent(wsrpcImport.Ident("CallOption"))
 
 	// --- client interface ---
 	iface := clientIfaceName(svc)
@@ -15,11 +16,11 @@ func (g *Generator) genClient(gf *protogen.GeneratedFile, svc *protogen.Service)
 		res := gf.QualifiedGoIdent(m.Output.GoIdent)
 		switch methodKind(m) {
 		case kindUnary:
-			gf.P("\t", m.GoName, "(ctx ", ctx, ", req *", req, ") (*", res, ", error)")
+			gf.P("\t", m.GoName, "(ctx ", ctx, ", req *", req, ", opts ...", callOpt, ") (*", res, ", error)")
 		case kindServerStream:
-			gf.P("\t", m.GoName, "(ctx ", ctx, ", req *", req, ") (*", clientWrapperName(svc, m), ", error)")
+			gf.P("\t", m.GoName, "(ctx ", ctx, ", req *", req, ", opts ...", callOpt, ") (*", clientWrapperName(svc, m), ", error)")
 		case kindClientStream, kindBidi:
-			gf.P("\t", m.GoName, "(ctx ", ctx, ") (*", clientWrapperName(svc, m), ", error)")
+			gf.P("\t", m.GoName, "(ctx ", ctx, ", opts ...", callOpt, ") (*", clientWrapperName(svc, m), ", error)")
 		}
 	}
 	gf.P("}")
@@ -100,6 +101,8 @@ func (g *Generator) genClientStreamWrapper(gf *protogen.GeneratedFile, svc *prot
 func (g *Generator) genClientMethod(gf *protogen.GeneratedFile, svc *protogen.Service, m *protogen.Method, impl string) {
 	ctx := gf.QualifiedGoIdent(contextImport.Ident("Context"))
 	ioEOF := gf.QualifiedGoIdent(ioImport.Ident("EOF"))
+	callOpt := gf.QualifiedGoIdent(wsrpcImport.Ident("CallOption"))
+	callHeaders := gf.QualifiedGoIdent(wsrpcImport.Ident("CallHeaders"))
 	req := gf.QualifiedGoIdent(m.Input.GoIdent)
 	res := gf.QualifiedGoIdent(m.Output.GoIdent)
 	route := methodRoute(svc, m)
@@ -107,8 +110,9 @@ func (g *Generator) genClientMethod(gf *protogen.GeneratedFile, svc *protogen.Se
 
 	switch methodKind(m) {
 	case kindUnary:
-		gf.P("func (c *", impl, ") ", m.GoName, "(ctx ", ctx, ", req *", req, ") (*", res, ", error) {")
-		gf.P("\ts, err := c.cc.NewStream(ctx, ", strconvQuote(route), ", nil)")
+		gf.P("func (c *", impl, ") ", m.GoName, "(ctx ", ctx, ", req *", req, ", opts ...", callOpt, ") (*", res, ", error) {")
+		gf.P("\theaders := ", callHeaders, "(opts...)")
+		gf.P("\ts, err := c.cc.NewStream(ctx, ", strconvQuote(route), ", headers)")
 		gf.P("\tif err != nil {")
 		gf.P("\t\treturn nil, err")
 		gf.P("\t}")
@@ -130,8 +134,9 @@ func (g *Generator) genClientMethod(gf *protogen.GeneratedFile, svc *protogen.Se
 		gf.P("}")
 		gf.P()
 	case kindServerStream:
-		gf.P("func (c *", impl, ") ", m.GoName, "(ctx ", ctx, ", req *", req, ") (*", wrapper, ", error) {")
-		gf.P("\ts, err := c.cc.NewStream(ctx, ", strconvQuote(route), ", nil)")
+		gf.P("func (c *", impl, ") ", m.GoName, "(ctx ", ctx, ", req *", req, ", opts ...", callOpt, ") (*", wrapper, ", error) {")
+		gf.P("\theaders := ", callHeaders, "(opts...)")
+		gf.P("\ts, err := c.cc.NewStream(ctx, ", strconvQuote(route), ", headers)")
 		gf.P("\tif err != nil {")
 		gf.P("\t\treturn nil, err")
 		gf.P("\t}")
@@ -145,8 +150,9 @@ func (g *Generator) genClientMethod(gf *protogen.GeneratedFile, svc *protogen.Se
 		gf.P("}")
 		gf.P()
 	case kindClientStream, kindBidi:
-		gf.P("func (c *", impl, ") ", m.GoName, "(ctx ", ctx, ") (*", wrapper, ", error) {")
-		gf.P("\ts, err := c.cc.NewStream(ctx, ", strconvQuote(route), ", nil)")
+		gf.P("func (c *", impl, ") ", m.GoName, "(ctx ", ctx, ", opts ...", callOpt, ") (*", wrapper, ", error) {")
+		gf.P("\theaders := ", callHeaders, "(opts...)")
+		gf.P("\ts, err := c.cc.NewStream(ctx, ", strconvQuote(route), ", headers)")
 		gf.P("\tif err != nil {")
 		gf.P("\t\treturn nil, err")
 		gf.P("\t}")

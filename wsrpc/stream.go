@@ -19,6 +19,10 @@ type Stream struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 
+	// deadlineCancel releases the timeout context derived from a caller's
+	// ws-timeout-ms header (server side); nil when no per-stream deadline.
+	deadlineCancel context.CancelFunc
+
 	mu     sync.Mutex
 	header map[string]string // guarded by mu
 	endSt  *Status           // guarded by mu
