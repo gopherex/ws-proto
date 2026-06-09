@@ -45,7 +45,7 @@ test-ts:
 
 # --- release -----------------------------------------------------------------
 # One version drives everything: the Go module is tagged vX.Y.Z, and both npm
-# packages (@gopherex/ws-transport, @gopherex/protoc-gen-ws-es) are bumped to the
+# packages (@gopherex/ws-proto-transport, @gopherex/protoc-gen-ws-es) are bumped to the
 # same X.Y.Z. Pushing the tag triggers .github/workflows/release.yml, which
 # builds the Go plugin binaries and publishes the npm packages to GitHub Packages.
 release:
