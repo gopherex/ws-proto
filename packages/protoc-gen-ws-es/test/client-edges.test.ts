@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeAll } from "vitest";
 import { WsTransport, FakeSocket, WsStatusError, Kind } from "@gopherex/ws-proto-transport";
+import type { Interceptor } from "@gopherex/ws-proto-transport";
 import { create } from "@bufbuild/protobuf";
 import type { GenMessage } from "@bufbuild/protobuf/codegenv2";
 
@@ -41,6 +42,30 @@ describe("generated client error edges", () => {
     await tick();
     sock.inject({ streamId: 1, kind: Kind.KIND_END, status: { code: 7, message: "denied" } });
     await expect(p).rejects.toBeInstanceOf(WsStatusError);
+  });
+
+  it("runs a transport interceptor through the generated client (auth + message transform)", async () => {
+    const seen: string[] = [];
+    const auth: Interceptor = (next) => async (req) => {
+      req.header["authorization"] = "Bearer tok";
+      seen.push(`${req.method.typeName}/${req.method.name}`);
+      const res = await next(req);
+      return res;
+    };
+    const sock = new FakeSocket();
+    const client = new EchoServiceClient(WsTransport.fromSocket(sock, { interceptors: [auth] }));
+    const p = client.unary(create(UnaryRequestSchema, { name: "x" }));
+    await tick();
+
+    // The interceptor saw the typed method and injected the auth header onto OPEN.
+    expect(seen).toEqual(["echo.v1.EchoService/Unary"]);
+    const open = sock.sent.find((f) => f.kind === Kind.KIND_OPEN && f.streamId === 1);
+    expect(open?.headers["authorization"]).toBe("Bearer tok");
+
+    const msg = sock.sent.find((f) => f.kind === Kind.KIND_MSG && f.streamId === 1)!;
+    sock.inject({ streamId: 1, kind: Kind.KIND_MSG, payload: msg.payload });
+    sock.inject({ streamId: 1, kind: Kind.KIND_END, status: { code: 0 } });
+    await p;
   });
 
   it("unary rejects when the server ends with an error AFTER sending a message", async () => {

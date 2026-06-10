@@ -1,8 +1,26 @@
+import { toBinary, fromBinary } from "@bufbuild/protobuf";
+import type { Message } from "@bufbuild/protobuf";
 import { Mux, SUBPROTOCOL } from "./mux.js";
 import type { WebSocketLike, StreamInit } from "./mux.js";
 import type { ClientStream } from "./stream.js";
+import { applyInterceptors, route } from "./interceptor.js";
+import type {
+  Interceptor,
+  MethodInfo,
+  UnaryRequest,
+  UnaryResponse,
+  StreamRequest,
+  StreamResponse,
+} from "./interceptor.js";
 
 export type { WebSocketLike, StreamInit };
+
+/** CallShape carries the per-call options the generated client forwards. */
+interface CallShape {
+  headers?: Record<string, string>;
+  signal?: AbortSignal;
+  timeoutMs?: number;
+}
 
 /**
  * SUBPROTOCOL is the WebSocket subprotocol token offered during the RFC 6455
@@ -60,6 +78,13 @@ export interface WsTransportOptions {
    * push an enormous frame and exhaust memory). Default: unset (no cap).
    */
   maxFrameBytes?: number;
+  /**
+   * interceptors are applied transport-wide to every typed call made through
+   * unary()/stream() (and thus through generated clients). The first interceptor
+   * is the outermost. They can read/modify request metadata and messages,
+   * observe/transform responses, short-circuit, and read trailers.
+   */
+  interceptors?: Interceptor[];
   reconnect?: boolean;
   backoff?: { initialMs?: number; maxMs?: number };
   createSocket?: (url: string) => WebSocketLike;
@@ -76,6 +101,7 @@ export class WsTransport {
   private readonly initialWindow?: number;
   private readonly maxSendBuffer?: number;
   private readonly maxFrameBytes?: number;
+  private readonly interceptors?: Interceptor[];
 
   // Reconnect machinery (active only when reconnect is enabled and the transport
   // owns dialing, i.e. not via fromSocket).
@@ -104,6 +130,7 @@ export class WsTransport {
     this.initialWindow = opts?.initialWindow;
     this.maxSendBuffer = opts?.maxSendBuffer;
     this.maxFrameBytes = opts?.maxFrameBytes;
+    this.interceptors = opts?.interceptors;
     this.createSocket =
       opts?.createSocket ??
       ((u: string) => new WebSocket(u, SUBPROTOCOL) as unknown as WebSocketLike);
@@ -197,6 +224,123 @@ export class WsTransport {
   /** openStream begins a new RPC: sends OPEN(method, init.headers) and returns the stream. */
   openStream(method: string, init?: StreamInit): ClientStream {
     return this.mux.openStream(method, init);
+  }
+
+  /**
+   * unary dispatches a typed unary RPC through the interceptor chain. The
+   * terminal serializes the request, opens a stream, reads the single response,
+   * and observes the terminal status (a trailing error END is surfaced, not
+   * swallowed). Generated clients call this; callers rarely call it directly.
+   */
+  async unary<I extends Message, O extends Message>(
+    method: MethodInfo<I, O>,
+    message: I,
+    options?: CallShape,
+  ): Promise<UnaryResponse<I, O>> {
+    const req: UnaryRequest<I, O> = {
+      stream: false,
+      method,
+      header: { ...options?.headers },
+      message,
+      signal: options?.signal,
+      timeoutMs: options?.timeoutMs,
+    };
+    const chain = applyInterceptors((r) => this.unaryTerminal(r as UnaryRequest), this.interceptors);
+    return (await chain(req)) as UnaryResponse<I, O>;
+  }
+
+  /**
+   * stream dispatches a typed streaming RPC (server-, client-, or bidi-) through
+   * the interceptor chain. The request is an AsyncIterable of typed messages;
+   * the response exposes an AsyncIterable of typed messages plus header/trailer.
+   */
+  async stream<I extends Message, O extends Message>(
+    method: MethodInfo<I, O>,
+    input: AsyncIterable<I>,
+    options?: CallShape,
+  ): Promise<StreamResponse<I, O>> {
+    const req: StreamRequest<I, O> = {
+      stream: true,
+      method,
+      header: { ...options?.headers },
+      message: input,
+      signal: options?.signal,
+      timeoutMs: options?.timeoutMs,
+    };
+    const chain = applyInterceptors((r) => this.streamTerminal(r as StreamRequest), this.interceptors);
+    return (await chain(req)) as StreamResponse<I, O>;
+  }
+
+  /** unaryTerminal performs the actual unary I/O (innermost of the chain). */
+  private async unaryTerminal(req: UnaryRequest): Promise<UnaryResponse> {
+    const m = req.method;
+    const stream = this.openStream(route(m), {
+      headers: req.header,
+      signal: req.signal,
+      timeoutMs: req.timeoutMs,
+    });
+    stream.send(toBinary(m.input, req.message));
+    stream.closeSend();
+    const bytes = await stream.recv();
+    if (bytes === null) {
+      throw new Error(`${m.typeName}.${m.name}: server closed stream without a response`);
+    }
+    const message = fromBinary(m.output, bytes);
+    // Observe the terminal status: a trailing error END after the message must
+    // surface (this recv() rejects) rather than being swallowed.
+    const tail = await stream.recv();
+    if (tail !== null) {
+      throw new Error(`${m.typeName}.${m.name}: server sent more than one response message`);
+    }
+    const header = await stream.responseLeadingHeaders();
+    const trailer = await stream.responseHeaders();
+    return { stream: false, method: m, header, message, trailer };
+  }
+
+  /** streamTerminal performs the actual streaming I/O (innermost of the chain). */
+  private async streamTerminal(req: StreamRequest): Promise<StreamResponse> {
+    const m = req.method;
+    const stream = this.openStream(route(m), {
+      headers: req.header,
+      signal: req.signal,
+      timeoutMs: req.timeoutMs,
+    });
+    // Pump request messages concurrently; on source failure cancel so the read
+    // side ends promptly, and re-raise the captured error after iteration.
+    let pumpError: unknown;
+    const pump = (async () => {
+      try {
+        for await (const msg of req.message) {
+          stream.send(toBinary(m.input, msg));
+        }
+        stream.closeSend();
+      } catch (err) {
+        pumpError = err;
+        stream.cancel();
+      }
+    })();
+
+    // Metadata fills in as it arrives rather than blocking the response object:
+    // leading header on the first frame, trailer once the stream ends.
+    const header: Record<string, string> = {};
+    void stream.responseLeadingHeaders().then((h) => Object.assign(header, h));
+    const trailer: Record<string, string> = {};
+
+    async function* responseGen(): AsyncIterable<Message> {
+      try {
+        for await (const frameBytes of stream) {
+          yield fromBinary(m.output, frameBytes);
+        }
+      } finally {
+        await pump;
+        Object.assign(trailer, await stream.responseHeaders());
+        if (pumpError !== undefined) {
+          throw pumpError;
+        }
+      }
+    }
+
+    return { stream: true, method: m, header, message: responseGen(), trailer };
   }
 
   /** close tears down all in-flight streams, stops reconnection, and closes the socket. */

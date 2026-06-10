@@ -14,3 +14,18 @@ export type { Frame, Status } from "./frame.js";
 export { encodeFrame, decodeFrame } from "./frame.js";
 export type { FrameInit } from "./frame.js";
 export { FakeSocket } from "./fake-socket.js";
+export { applyInterceptors, route } from "./interceptor.js";
+export { applyUnaryCallbacks, iterateStream, firstResponse } from "./client-runtime.js";
+export type { CallCallbacks } from "./client-runtime.js";
+export type {
+  Interceptor,
+  MethodInfo,
+  MethodKind,
+  UnaryRequest,
+  StreamRequest,
+  UnaryResponse,
+  StreamResponse,
+  AnyRequest,
+  AnyResponse,
+  AnyFn,
+} from "./interceptor.js";

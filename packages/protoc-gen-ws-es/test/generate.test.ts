@@ -20,10 +20,14 @@ describe("protoc-gen-ws-es generation", () => {
     expect(existsSync(resolve(here, "gen/echo_pb.ts"))).toBe(true);
   });
 
-  it("emits a client class with the wire path", () => {
+  it("emits a client class wired through MethodInfo descriptors", () => {
     const src = readFileSync(genFile, "utf8");
     expect(src).toContain("export class EchoServiceClient");
-    expect(src).toContain('"/echo.v1.EchoService/Unary"');
+    // The wire route now lives in a MethodInfo descriptor (typeName + name)
+    // passed to the transport's typed dispatch, not as an inline string.
+    expect(src).toContain("EchoService_Unary");
+    expect(src).toContain('typeName: "echo.v1.EchoService"');
+    expect(src).toContain('name: "Unary"');
   });
 
   it("emits the correct signature for each method kind", () => {
