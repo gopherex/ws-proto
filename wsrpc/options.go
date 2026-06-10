@@ -47,14 +47,14 @@ type serverConfig struct {
 	originPatterns     []string
 	insecureSkipOrigin bool
 	readLimit          int64
-	keepalive        time.Duration
-	keepaliveTimeout time.Duration
-	receiveBuffer    int
-	initialWindow    int
-	maxStreams       int
-	compression      CompressionMode
-	connContext      func(ctx context.Context, r *http.Request) context.Context
-	middleware       []Middleware
+	keepalive          time.Duration
+	keepaliveTimeout   time.Duration
+	receiveBuffer      int
+	initialWindow      int
+	maxStreams         int
+	compression        CompressionMode
+	connContext        func(ctx context.Context, r *http.Request) context.Context
+	middleware         []Middleware
 }
 
 // ServerOption configures a Server.
@@ -162,6 +162,7 @@ type dialConfig struct {
 	initialWindow    int
 	compression      CompressionMode
 	reconnect        reconnectConfig
+	interceptors     []Interceptor
 }
 
 // DialOption configures a client Dial.
@@ -209,6 +210,14 @@ func WithDialInitialWindow(n int) DialOption {
 // Default CompressionDisabled.
 func WithDialCompression(m CompressionMode) DialOption {
 	return func(c *dialConfig) { c.compression = m }
+}
+
+// WithClientInterceptor installs client interceptors, applied to every typed
+// call made through a generated client. The first interceptor is the outermost.
+// Interceptors can read/modify request metadata and messages, observe/transform
+// responses, short-circuit a call, and read trailers — across all method kinds.
+func WithClientInterceptor(interceptors ...Interceptor) DialOption {
+	return func(c *dialConfig) { c.interceptors = append(c.interceptors, interceptors...) }
 }
 
 func defaultDialConfig() dialConfig {

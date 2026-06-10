@@ -140,68 +140,68 @@ func NewEchoServiceWSClient(cc *wsrpc.ClientConn) EchoServiceWSClient {
 
 // EchoService_ServerStreamClientWS is the typed client stream for EchoService.ServerStream.
 type EchoService_ServerStreamClientWS struct {
-	stream *wsrpc.Stream
+	conn wsrpc.StreamingClientConn
 }
 
 func (x *EchoService_ServerStreamClientWS) Send(msg *ServerStreamRequest) error {
-	return x.stream.Send(msg)
+	return x.conn.Send(msg)
 }
 
 func (x *EchoService_ServerStreamClientWS) Recv() (*ServerStreamResponse, error) {
 	msg := new(ServerStreamResponse)
-	if err := x.stream.Recv(msg); err != nil {
+	if err := x.conn.Receive(msg); err != nil {
 		return nil, err
 	}
 	return msg, nil
 }
 
 func (x *EchoService_ServerStreamClientWS) CloseSend() error {
-	return x.stream.CloseSend()
+	return x.conn.CloseRequest()
 }
 
 // Header returns the leading response headers (KIND_HEADER), if the server sent any.
 func (x *EchoService_ServerStreamClientWS) Header() map[string]string {
-	return x.stream.Header()
+	return x.conn.ResponseHeader()
 }
 
 // Trailer returns the response trailers carried on the END frame.
 func (x *EchoService_ServerStreamClientWS) Trailer() map[string]string {
-	return x.stream.Trailer()
+	return x.conn.ResponseTrailer()
 }
 
 // EchoService_ClientStreamClientWS is the typed client stream for EchoService.ClientStream.
 type EchoService_ClientStreamClientWS struct {
-	stream *wsrpc.Stream
+	conn wsrpc.StreamingClientConn
 }
 
 func (x *EchoService_ClientStreamClientWS) Send(msg *ClientStreamRequest) error {
-	return x.stream.Send(msg)
+	return x.conn.Send(msg)
 }
 
 func (x *EchoService_ClientStreamClientWS) Recv() (*ClientStreamResponse, error) {
 	msg := new(ClientStreamResponse)
-	if err := x.stream.Recv(msg); err != nil {
+	if err := x.conn.Receive(msg); err != nil {
 		return nil, err
 	}
 	return msg, nil
 }
 
 func (x *EchoService_ClientStreamClientWS) CloseSend() error {
-	return x.stream.CloseSend()
+	return x.conn.CloseRequest()
 }
 
 // Header returns the leading response headers (KIND_HEADER), if the server sent any.
 func (x *EchoService_ClientStreamClientWS) Header() map[string]string {
-	return x.stream.Header()
+	return x.conn.ResponseHeader()
 }
 
 // Trailer returns the response trailers carried on the END frame.
 func (x *EchoService_ClientStreamClientWS) Trailer() map[string]string {
-	return x.stream.Trailer()
+	return x.conn.ResponseTrailer()
 }
 
 func (x *EchoService_ClientStreamClientWS) CloseAndRecv() (*ClientStreamResponse, error) {
-	if err := x.stream.CloseSend(); err != nil {
+	if err := x.conn.CloseRequest(); err != nil {
 		return nil, err
 	}
 	return x.Recv()
@@ -209,88 +209,71 @@ func (x *EchoService_ClientStreamClientWS) CloseAndRecv() (*ClientStreamResponse
 
 // EchoService_BidiClientWS is the typed client stream for EchoService.Bidi.
 type EchoService_BidiClientWS struct {
-	stream *wsrpc.Stream
+	conn wsrpc.StreamingClientConn
 }
 
 func (x *EchoService_BidiClientWS) Send(msg *BidiRequest) error {
-	return x.stream.Send(msg)
+	return x.conn.Send(msg)
 }
 
 func (x *EchoService_BidiClientWS) Recv() (*BidiResponse, error) {
 	msg := new(BidiResponse)
-	if err := x.stream.Recv(msg); err != nil {
+	if err := x.conn.Receive(msg); err != nil {
 		return nil, err
 	}
 	return msg, nil
 }
 
 func (x *EchoService_BidiClientWS) CloseSend() error {
-	return x.stream.CloseSend()
+	return x.conn.CloseRequest()
 }
 
 // Header returns the leading response headers (KIND_HEADER), if the server sent any.
 func (x *EchoService_BidiClientWS) Header() map[string]string {
-	return x.stream.Header()
+	return x.conn.ResponseHeader()
 }
 
 // Trailer returns the response trailers carried on the END frame.
 func (x *EchoService_BidiClientWS) Trailer() map[string]string {
-	return x.stream.Trailer()
+	return x.conn.ResponseTrailer()
 }
 
 func (c *echoServiceWSClient) Unary(ctx context.Context, req *UnaryRequest, opts ...wsrpc.CallOption) (*UnaryResponse, error) {
-	headers := wsrpc.CallHeaders(opts...)
-	s, err := c.cc.NewStream(ctx, "/echo.v1.EchoService/Unary", headers)
+	out, err := wsrpc.InvokeUnary(ctx, c.cc, wsrpc.MethodSpec{Route: "/echo.v1.EchoService/Unary", Kind: wsrpc.StreamKindUnary}, req, func() proto.Message { return new(UnaryResponse) }, wsrpc.CallHeaders(opts...))
 	if err != nil {
 		return nil, err
 	}
-	if err := s.Send(req); err != nil {
-		return nil, err
-	}
-	if err := s.CloseSend(); err != nil {
-		return nil, err
-	}
-	res := new(UnaryResponse)
-	if err := s.Recv(res); err != nil {
-		return nil, err
-	}
-	if err := s.Recv(new(UnaryResponse)); err != nil && err != io.EOF {
-		return nil, err
-	}
-	return res, nil
+	return out.(*UnaryResponse), nil
 }
 
 func (c *echoServiceWSClient) ServerStream(ctx context.Context, req *ServerStreamRequest, opts ...wsrpc.CallOption) (*EchoService_ServerStreamClientWS, error) {
-	headers := wsrpc.CallHeaders(opts...)
-	s, err := c.cc.NewStream(ctx, "/echo.v1.EchoService/ServerStream", headers)
+	conn, err := wsrpc.OpenStreamingClient(ctx, c.cc, wsrpc.MethodSpec{Route: "/echo.v1.EchoService/ServerStream", Kind: wsrpc.StreamKindServerStream}, wsrpc.CallHeaders(opts...))
 	if err != nil {
 		return nil, err
 	}
-	if err := s.Send(req); err != nil {
+	if err := conn.Send(req); err != nil {
 		return nil, err
 	}
-	if err := s.CloseSend(); err != nil {
+	if err := conn.CloseRequest(); err != nil {
 		return nil, err
 	}
-	return &EchoService_ServerStreamClientWS{stream: s}, nil
+	return &EchoService_ServerStreamClientWS{conn: conn}, nil
 }
 
 func (c *echoServiceWSClient) ClientStream(ctx context.Context, opts ...wsrpc.CallOption) (*EchoService_ClientStreamClientWS, error) {
-	headers := wsrpc.CallHeaders(opts...)
-	s, err := c.cc.NewStream(ctx, "/echo.v1.EchoService/ClientStream", headers)
+	conn, err := wsrpc.OpenStreamingClient(ctx, c.cc, wsrpc.MethodSpec{Route: "/echo.v1.EchoService/ClientStream", Kind: wsrpc.StreamKindClientStream}, wsrpc.CallHeaders(opts...))
 	if err != nil {
 		return nil, err
 	}
-	return &EchoService_ClientStreamClientWS{stream: s}, nil
+	return &EchoService_ClientStreamClientWS{conn: conn}, nil
 }
 
 func (c *echoServiceWSClient) Bidi(ctx context.Context, opts ...wsrpc.CallOption) (*EchoService_BidiClientWS, error) {
-	headers := wsrpc.CallHeaders(opts...)
-	s, err := c.cc.NewStream(ctx, "/echo.v1.EchoService/Bidi", headers)
+	conn, err := wsrpc.OpenStreamingClient(ctx, c.cc, wsrpc.MethodSpec{Route: "/echo.v1.EchoService/Bidi", Kind: wsrpc.StreamKindBidiStream}, wsrpc.CallHeaders(opts...))
 	if err != nil {
 		return nil, err
 	}
-	return &EchoService_BidiClientWS{stream: s}, nil
+	return &EchoService_BidiClientWS{conn: conn}, nil
 }
 
 // echoServiceGRPCBridge adapts a gRPC EchoServiceServer to a EchoServiceHandler.

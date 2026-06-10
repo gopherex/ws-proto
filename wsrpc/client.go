@@ -28,6 +28,10 @@ type ClientConn struct {
 	reconn  *reconnector  // nil unless WithReconnect
 	waitCh  chan struct{} // broadcast: replaced (closed+remade) on each mux install
 	closeCh chan struct{} // closed once on Close to unblock the controller/waiters
+
+	// interceptors run on every typed call made through the generated client's
+	// InvokeUnary / OpenStreamingClient dispatch. Set once at Dial; read-only.
+	interceptors []Interceptor
 }
 
 // Dial opens a WebSocket to url (ws:// or wss://) and returns a ClientConn.
@@ -41,9 +45,10 @@ func Dial(ctx context.Context, url string, opts ...DialOption) (*ClientConn, err
 		return nil, err
 	}
 	cc := &ClientConn{
-		mux:     mux,
-		waitCh:  make(chan struct{}),
-		closeCh: make(chan struct{}),
+		mux:          mux,
+		waitCh:       make(chan struct{}),
+		closeCh:      make(chan struct{}),
+		interceptors: cfg.interceptors,
 	}
 	if cfg.reconnect.enabled {
 		cc.reconn = &reconnector{

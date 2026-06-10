@@ -52,28 +52,40 @@ func (g *Generator) genClient(gf *protogen.GeneratedFile, svc *protogen.Service)
 	}
 }
 
-// genClientStreamWrapper emits <Svc>_<Method>Client wrapping *wsrpc.Stream.
-// Send encodes a request; Recv decodes a response; CloseSend forwards.
+// streamKindIdent returns the wsrpc.StreamKind* constant for a streaming method.
+func streamKindIdent(gf *protogen.GeneratedFile, m *protogen.Method) string {
+	switch methodKind(m) {
+	case kindServerStream:
+		return gf.QualifiedGoIdent(wsrpcImport.Ident("StreamKindServerStream"))
+	case kindClientStream:
+		return gf.QualifiedGoIdent(wsrpcImport.Ident("StreamKindClientStream"))
+	default: // bidi
+		return gf.QualifiedGoIdent(wsrpcImport.Ident("StreamKindBidiStream"))
+	}
+}
+
+// genClientStreamWrapper emits <Svc>_<Method>Client wrapping a
+// wsrpc.StreamingClientConn (so client interceptors can wrap Send/Receive).
 func (g *Generator) genClientStreamWrapper(gf *protogen.GeneratedFile, svc *protogen.Service, m *protogen.Method) {
 	name := clientWrapperName(svc, m)
 	req := gf.QualifiedGoIdent(m.Input.GoIdent)
 	res := gf.QualifiedGoIdent(m.Output.GoIdent)
-	stream := gf.QualifiedGoIdent(wsrpcImport.Ident("Stream"))
+	connType := gf.QualifiedGoIdent(wsrpcImport.Ident("StreamingClientConn"))
 
 	gf.P("// ", name, " is the typed client stream for ", svc.GoName, ".", m.GoName, ".")
 	gf.P("type ", name, " struct {")
-	gf.P("\tstream *", stream)
+	gf.P("\tconn ", connType)
 	gf.P("}")
 	gf.P()
 
 	gf.P("func (x *", name, ") Send(msg *", req, ") error {")
-	gf.P("\treturn x.stream.Send(msg)")
+	gf.P("\treturn x.conn.Send(msg)")
 	gf.P("}")
 	gf.P()
 
 	gf.P("func (x *", name, ") Recv() (*", res, ", error) {")
 	gf.P("\tmsg := new(", res, ")")
-	gf.P("\tif err := x.stream.Recv(msg); err != nil {")
+	gf.P("\tif err := x.conn.Receive(msg); err != nil {")
 	gf.P("\t\treturn nil, err")
 	gf.P("\t}")
 	gf.P("\treturn msg, nil")
@@ -81,26 +93,26 @@ func (g *Generator) genClientStreamWrapper(gf *protogen.GeneratedFile, svc *prot
 	gf.P()
 
 	gf.P("func (x *", name, ") CloseSend() error {")
-	gf.P("\treturn x.stream.CloseSend()")
+	gf.P("\treturn x.conn.CloseRequest()")
 	gf.P("}")
 	gf.P()
 
 	gf.P("// Header returns the leading response headers (KIND_HEADER), if the server sent any.")
 	gf.P("func (x *", name, ") Header() map[string]string {")
-	gf.P("\treturn x.stream.Header()")
+	gf.P("\treturn x.conn.ResponseHeader()")
 	gf.P("}")
 	gf.P()
 
 	gf.P("// Trailer returns the response trailers carried on the END frame.")
 	gf.P("func (x *", name, ") Trailer() map[string]string {")
-	gf.P("\treturn x.stream.Trailer()")
+	gf.P("\treturn x.conn.ResponseTrailer()")
 	gf.P("}")
 	gf.P()
 
 	// For client-stream, the response is collected by CloseAndRecv.
 	if methodKind(m) == kindClientStream {
 		gf.P("func (x *", name, ") CloseAndRecv() (*", res, ", error) {")
-		gf.P("\tif err := x.stream.CloseSend(); err != nil {")
+		gf.P("\tif err := x.conn.CloseRequest(); err != nil {")
 		gf.P("\t\treturn nil, err")
 		gf.P("\t}")
 		gf.P("\treturn x.Recv()")
@@ -109,12 +121,13 @@ func (g *Generator) genClientStreamWrapper(gf *protogen.GeneratedFile, svc *prot
 	}
 }
 
-// genClientMethod emits one client func per method on the impl struct.
+// genClientMethod emits one client func per method on the impl struct, routing
+// through the wsrpc dispatch helpers so client interceptors run.
 func (g *Generator) genClientMethod(gf *protogen.GeneratedFile, svc *protogen.Service, m *protogen.Method, impl string) {
 	ctx := gf.QualifiedGoIdent(contextImport.Ident("Context"))
-	ioEOF := gf.QualifiedGoIdent(ioImport.Ident("EOF"))
 	callOpt := gf.QualifiedGoIdent(wsrpcImport.Ident("CallOption"))
 	callHeaders := gf.QualifiedGoIdent(wsrpcImport.Ident("CallHeaders"))
+	methodSpec := gf.QualifiedGoIdent(wsrpcImport.Ident("MethodSpec"))
 	req := gf.QualifiedGoIdent(m.Input.GoIdent)
 	res := gf.QualifiedGoIdent(m.Output.GoIdent)
 	route := methodRoute(svc, m)
@@ -122,53 +135,41 @@ func (g *Generator) genClientMethod(gf *protogen.GeneratedFile, svc *protogen.Se
 
 	switch methodKind(m) {
 	case kindUnary:
+		invokeUnary := gf.QualifiedGoIdent(wsrpcImport.Ident("InvokeUnary"))
+		protoMsg := gf.QualifiedGoIdent(protoImport.Ident("Message"))
+		unaryKind := gf.QualifiedGoIdent(wsrpcImport.Ident("StreamKindUnary"))
 		gf.P("func (c *", impl, ") ", m.GoName, "(ctx ", ctx, ", req *", req, ", opts ...", callOpt, ") (*", res, ", error) {")
-		gf.P("\theaders := ", callHeaders, "(opts...)")
-		gf.P("\ts, err := c.cc.NewStream(ctx, ", strconvQuote(route), ", headers)")
+		gf.P("\tout, err := ", invokeUnary, "(ctx, c.cc, ", methodSpec, "{Route: ", strconvQuote(route), ", Kind: ", unaryKind, "}, req, func() ", protoMsg, " { return new(", res, ") }, ", callHeaders, "(opts...))")
 		gf.P("\tif err != nil {")
 		gf.P("\t\treturn nil, err")
 		gf.P("\t}")
-		gf.P("\tif err := s.Send(req); err != nil {")
-		gf.P("\t\treturn nil, err")
-		gf.P("\t}")
-		gf.P("\tif err := s.CloseSend(); err != nil {")
-		gf.P("\t\treturn nil, err")
-		gf.P("\t}")
-		gf.P("\tres := new(", res, ")")
-		gf.P("\tif err := s.Recv(res); err != nil {")
-		gf.P("\t\treturn nil, err")
-		gf.P("\t}")
-		// Drain the trailing END (io.EOF) so the stream closes cleanly.
-		gf.P("\tif err := s.Recv(new(", res, ")); err != nil && err != ", ioEOF, " {")
-		gf.P("\t\treturn nil, err")
-		gf.P("\t}")
-		gf.P("\treturn res, nil")
+		gf.P("\treturn out.(*", res, "), nil")
 		gf.P("}")
 		gf.P()
 	case kindServerStream:
+		openStream := gf.QualifiedGoIdent(wsrpcImport.Ident("OpenStreamingClient"))
 		gf.P("func (c *", impl, ") ", m.GoName, "(ctx ", ctx, ", req *", req, ", opts ...", callOpt, ") (*", wrapper, ", error) {")
-		gf.P("\theaders := ", callHeaders, "(opts...)")
-		gf.P("\ts, err := c.cc.NewStream(ctx, ", strconvQuote(route), ", headers)")
+		gf.P("\tconn, err := ", openStream, "(ctx, c.cc, ", methodSpec, "{Route: ", strconvQuote(route), ", Kind: ", streamKindIdent(gf, m), "}, ", callHeaders, "(opts...))")
 		gf.P("\tif err != nil {")
 		gf.P("\t\treturn nil, err")
 		gf.P("\t}")
-		gf.P("\tif err := s.Send(req); err != nil {")
+		gf.P("\tif err := conn.Send(req); err != nil {")
 		gf.P("\t\treturn nil, err")
 		gf.P("\t}")
-		gf.P("\tif err := s.CloseSend(); err != nil {")
+		gf.P("\tif err := conn.CloseRequest(); err != nil {")
 		gf.P("\t\treturn nil, err")
 		gf.P("\t}")
-		gf.P("\treturn &", wrapper, "{stream: s}, nil")
+		gf.P("\treturn &", wrapper, "{conn: conn}, nil")
 		gf.P("}")
 		gf.P()
 	case kindClientStream, kindBidi:
+		openStream := gf.QualifiedGoIdent(wsrpcImport.Ident("OpenStreamingClient"))
 		gf.P("func (c *", impl, ") ", m.GoName, "(ctx ", ctx, ", opts ...", callOpt, ") (*", wrapper, ", error) {")
-		gf.P("\theaders := ", callHeaders, "(opts...)")
-		gf.P("\ts, err := c.cc.NewStream(ctx, ", strconvQuote(route), ", headers)")
+		gf.P("\tconn, err := ", openStream, "(ctx, c.cc, ", methodSpec, "{Route: ", strconvQuote(route), ", Kind: ", streamKindIdent(gf, m), "}, ", callHeaders, "(opts...))")
 		gf.P("\tif err != nil {")
 		gf.P("\t\treturn nil, err")
 		gf.P("\t}")
-		gf.P("\treturn &", wrapper, "{stream: s}, nil")
+		gf.P("\treturn &", wrapper, "{conn: conn}, nil")
 		gf.P("}")
 		gf.P()
 	}

@@ -337,6 +337,57 @@ func Auth(next wsrpc.Handler) wsrpc.Handler {
 srv := wsrpc.NewServer(wsrpc.WithMiddleware(Logging, Auth)) // Logging outermost
 ```
 
+### Client interceptors (Go & TS)
+
+Both clients support typed, **message-level** interceptors (the connect-web
+analog), installed connection-wide and applied to every generated call. An
+interceptor can read/modify request metadata and the typed request/response
+**messages**, short-circuit a call, and read trailers — across all four method
+kinds. The first interceptor listed is the outermost.
+
+**Go** — `wsrpc.WithClientInterceptor`. Use `UnaryInterceptorFunc` /
+`StreamInterceptorFunc` to wrap only one call shape:
+
+```go
+auth := wsrpc.UnaryInterceptorFunc(func(next wsrpc.UnaryFunc) wsrpc.UnaryFunc {
+    return func(ctx context.Context, req *wsrpc.AnyRequest) (*wsrpc.AnyResponse, error) {
+        req.Header["authorization"] = "Bearer " + token // injected onto OPEN
+        return next(ctx, req)
+    }
+})
+cc, _ := wsrpc.Dial(ctx, url, wsrpc.WithClientInterceptor(auth))
+```
+
+Streaming interceptors wrap the `StreamingClientConn` to observe each
+`Send`/`Receive`:
+
+```go
+trace := wsrpc.StreamInterceptorFunc(func(next wsrpc.StreamingClientFunc) wsrpc.StreamingClientFunc {
+    return func(ctx context.Context, spec wsrpc.MethodSpec, header map[string]string) (wsrpc.StreamingClientConn, error) {
+        conn, err := next(ctx, spec, header)
+        if err != nil { return nil, err }
+        return &myWrapConn{StreamingClientConn: conn}, nil // override Send/Receive
+    }
+})
+```
+
+**TS** — `WsTransportOptions.interceptors`. One `Interceptor` type covers unary
+and streaming (`req.stream` discriminates):
+
+```ts
+const auth: Interceptor = (next) => async (req) => {
+  req.header["authorization"] = `Bearer ${token}`; // injected onto OPEN
+  return next(req);
+};
+const transport = new WsTransport(url, { interceptors: [auth] });
+const client = new EchoServiceClient(transport);
+```
+
+The interceptor sees `req.method` (the typed `MethodInfo`), may replace
+`req.message` (unary) before serialization, and may wrap the response message
+stream. This is the recommended way to propagate auth — see also "Auth & origin
+behind a proxy" for the connection-level options.
+
 ### Response headers & trailers (Go)
 
 A server handler may send **leading** response metadata once, before the first
