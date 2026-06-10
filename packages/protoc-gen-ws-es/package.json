@@ -55,7 +55,7 @@
     "@bufbuild/protoc-gen-es": "^2.2.0",
     "@gopherex/ws-proto-transport": "*",
     "typescript": "^5.6.0",
-    "vitest": "^2.1.0",
+    "vitest": "^3.2.6",
     "ws": "^8.18.0",
     "@types/ws": "^8.5.0"
   },

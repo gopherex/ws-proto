@@ -29,10 +29,17 @@ type Mux struct {
 
 	onOpen func(*Stream) // server-side dispatch; nil on client
 
-	recvBuffer    int // per-stream inbound MSG queue capacity
 	initialWindow int // per-stream credit window (bytes) for flow control
+	maxStreams    int // cap on concurrent server streams; 0 = unlimited (client)
 
 	writeMu sync.Mutex // serialize frame writes
+
+	// ctrlCh carries control frames the read loop needs to emit (overflow RST,
+	// over-limit RST) so they are written by a separate writer goroutine. The
+	// read loop must NEVER perform a blocking socket write: a Send parked inside
+	// WriteFrame (peer's buffer full) holds writeMu, and an inline write on the
+	// read loop would block behind it, stalling reads and deadlocking the conn.
+	ctrlCh chan *transport.Frame
 
 	// closed records a deliberate user Close so the conn-loss path can
 	// distinguish an intentional shutdown (codes.Canceled, "transport closed")
@@ -45,10 +52,10 @@ func newMux(ctx context.Context, conn frameConn, onOpen func(*Stream)) *Mux {
 }
 
 func newMuxBuffered(ctx context.Context, conn frameConn, onOpen func(*Stream), recvBuffer int) *Mux {
-	return newMuxConfig(ctx, conn, onOpen, recvBuffer, defaultInitialWindow)
+	return newMuxConfig(ctx, conn, onOpen, recvBuffer, defaultInitialWindow, 0)
 }
 
-func newMuxConfig(ctx context.Context, conn frameConn, onOpen func(*Stream), recvBuffer, initialWindow int) *Mux {
+func newMuxConfig(ctx context.Context, conn frameConn, onOpen func(*Stream), recvBuffer, initialWindow, maxStreams int) *Mux {
 	if recvBuffer <= 0 {
 		recvBuffer = defaultReceiveBuffer
 	}
@@ -63,11 +70,42 @@ func newMuxConfig(ctx context.Context, conn frameConn, onOpen func(*Stream), rec
 		nextID:        1,
 		streams:       make(map[uint32]*Stream),
 		onOpen:        onOpen,
-		recvBuffer:    recvBuffer,
 		initialWindow: initialWindow,
+		maxStreams:    maxStreams,
+		ctrlCh:        make(chan *transport.Frame, ctrlBufferSize),
 	}
+	go m.ctrlWriter()
 	go m.readLoop()
 	return m
+}
+
+// ctrlBufferSize bounds the read loop's outstanding control-frame backlog. These
+// frames (overflow / over-limit RST) are rare; if the writer cannot keep up the
+// read loop drops them rather than block (the affected stream is already failed
+// locally, and a dropped RST only delays the peer's own cleanup).
+const ctrlBufferSize = 256
+
+// writeCtrl enqueues a control frame for the writer goroutine without ever
+// blocking the caller (the read loop). A full buffer means the writer is wedged
+// behind a stuck socket write; dropping the frame is safe (see ctrlBufferSize).
+func (m *Mux) writeCtrl(f *transport.Frame) {
+	select {
+	case m.ctrlCh <- f:
+	default:
+	}
+}
+
+// ctrlWriter drains ctrlCh and performs the (potentially blocking) socket writes
+// off the read loop, so the read loop only ever enqueues. Exits on mux teardown.
+func (m *Mux) ctrlWriter() {
+	for {
+		select {
+		case <-m.ctx.Done():
+			return
+		case f := <-m.ctrlCh:
+			_ = m.write(m.ctx, f)
+		}
+	}
 }
 
 // startKeepalive launches a goroutine that pings the peer every interval,
@@ -120,7 +158,7 @@ func (m *Mux) newClientStream(ctx context.Context, method string, headers map[st
 		}
 	}
 	id := atomic.AddUint32(&m.nextID, 2) - 2 // 1,3,5,...
-	s := newStream(ctx, m, id, method, m.recvBuffer, m.initialWindow)
+	s := newStream(ctx, m, id, method, m.initialWindow)
 	m.mu.Lock()
 	m.streams[id] = s
 	m.mu.Unlock()
@@ -171,6 +209,25 @@ func (m *Mux) route(f *transport.Frame) {
 		if m.onOpen == nil {
 			return // clients ignore OPEN
 		}
+		// Bound concurrent server streams: reject an OPEN past the cap with an
+		// RST(ResourceExhausted) without allocating a Stream or handler goroutine.
+		// The RST goes through writeCtrl so the read loop never blocks (see C1).
+		if m.maxStreams > 0 {
+			m.mu.Lock()
+			over := len(m.streams) >= m.maxStreams
+			m.mu.Unlock()
+			if over {
+				m.writeCtrl(&transport.Frame{
+					StreamId: f.StreamId,
+					Kind:     transport.Kind_KIND_RST,
+					Status: statusToProto(&Status{
+						Code:    codes.ResourceExhausted,
+						Message: "max concurrent streams exceeded",
+					}),
+				})
+				return
+			}
+		}
 		// Honor a caller-supplied deadline (ws-timeout-ms) by deriving the
 		// stream context with that timeout; otherwise inherit the mux context.
 		sctx := m.ctx
@@ -180,7 +237,7 @@ func (m *Mux) route(f *transport.Frame) {
 				sctx, dcancel = context.WithTimeout(m.ctx, time.Duration(ms)*time.Millisecond)
 			}
 		}
-		s := newStream(sctx, m, f.StreamId, f.Method, m.recvBuffer, m.initialWindow)
+		s := newStream(sctx, m, f.StreamId, f.Method, m.initialWindow)
 		s.deadlineCancel = dcancel
 		s.header = f.Headers
 		m.mu.Lock()
@@ -227,7 +284,7 @@ func (m *Mux) route(f *transport.Frame) {
 			// the stream locally and tell the peer to stop. The read loop must
 			// never block, so we drop this stream and move on to the others.
 			s.failWith(Errorf(codes.ResourceExhausted, "wsrpc: receive buffer overflow"))
-			_ = m.write(m.ctx, &transport.Frame{
+			m.writeCtrl(&transport.Frame{
 				StreamId: f.StreamId,
 				Kind:     transport.Kind_KIND_RST,
 				Status: statusToProto(&Status{

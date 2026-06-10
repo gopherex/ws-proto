@@ -33,17 +33,25 @@ const (
 	// Send blocks once it would exceed the available send window; the receiver
 	// returns credit as it consumes MSGs. See "Flow control" in the README.
 	defaultInitialWindow int = 256 * 1024 // 256 KiB
+	// defaultMaxStreams bounds the number of concurrent server streams accepted on
+	// one connection. Each OPEN beyond this is rejected with an RST
+	// (codes.ResourceExhausted) instead of allocating a handler goroutine, so a
+	// single client cannot exhaust server memory/goroutines. See
+	// WithMaxConcurrentStreams to tune or disable it.
+	defaultMaxStreams int = 1000
 	// Subprotocol is the negotiated Sec-WebSocket-Protocol value.
 	Subprotocol string = "wsrpc.v1"
 )
 
 type serverConfig struct {
-	originPatterns   []string
-	readLimit        int64
+	originPatterns     []string
+	insecureSkipOrigin bool
+	readLimit          int64
 	keepalive        time.Duration
 	keepaliveTimeout time.Duration
 	receiveBuffer    int
 	initialWindow    int
+	maxStreams       int
 	compression      CompressionMode
 	connContext      func(ctx context.Context, r *http.Request) context.Context
 	middleware       []Middleware
@@ -53,8 +61,20 @@ type serverConfig struct {
 type ServerOption func(*serverConfig)
 
 // WithOriginPatterns restricts accepted WebSocket Origin headers (CSRF defense).
+// Configuring it satisfies the fail-closed origin gate (see NewServer). Pass "*"
+// to match any origin (equivalent to disabling the browser Origin check).
 func WithOriginPatterns(patterns ...string) ServerOption {
 	return func(c *serverConfig) { c.originPatterns = patterns }
+}
+
+// WithInsecureSkipOriginCheck disables the WebSocket Origin check entirely,
+// accepting upgrades from ANY origin. It is the explicit opt-out required to run
+// without WithOriginPatterns (the server otherwise rejects every upgrade — see
+// NewServer). Only safe when cross-origin access is intended OR auth is enforced
+// on the Upgrade request (e.g. via WithConnContext); otherwise it exposes the
+// server to cross-site WebSocket hijacking.
+func WithInsecureSkipOriginCheck() ServerOption {
+	return func(c *serverConfig) { c.insecureSkipOrigin = true }
 }
 
 // WithKeepalive sets the server ping interval and pong timeout. interval<=0 disables pinging.
@@ -70,10 +90,10 @@ func WithReadLimit(n int64) ServerOption {
 	return func(c *serverConfig) { c.readLimit = n }
 }
 
-// WithReceiveBuffer bounds the per-stream inbound MSG queue. When a consumer is
-// too slow and the buffer fills, that stream is reset (codes.ResourceExhausted)
-// instead of blocking delivery to other streams on the connection. n<=0 keeps
-// the default.
+// WithReceiveBuffer is DEPRECATED and has no effect. The per-stream inbound
+// backlog is now bounded by BYTES, aligned with the flow-control window (see
+// WithInitialWindow), rather than by a fixed frame count — so a peer that obeys
+// the window is never falsely reset. Retained for API compatibility.
 func WithReceiveBuffer(n int) ServerOption {
 	return func(c *serverConfig) {
 		if n > 0 {
@@ -93,6 +113,15 @@ func WithInitialWindow(n int) ServerOption {
 			c.initialWindow = n
 		}
 	}
+}
+
+// WithMaxConcurrentStreams caps the number of simultaneously-open server streams
+// on a single connection. Each OPEN past the cap is answered with an RST
+// (codes.ResourceExhausted) and never reaches a handler, bounding goroutine and
+// memory use against a misbehaving or hostile client. The default is 1000; n<=0
+// disables the cap (unlimited — not recommended for untrusted clients).
+func WithMaxConcurrentStreams(n int) ServerOption {
+	return func(c *serverConfig) { c.maxStreams = n }
 }
 
 // WithConnContext lets handlers read the Upgrade HTTP request (auth headers, X-Forwarded-For)
@@ -120,6 +149,7 @@ func defaultServerConfig() serverConfig {
 		keepaliveTimeout: defaultKeepaliveTimeout,
 		receiveBuffer:    defaultReceiveBuffer,
 		initialWindow:    defaultInitialWindow,
+		maxStreams:       defaultMaxStreams,
 	}
 }
 
@@ -155,8 +185,8 @@ func WithDialReadLimit(n int64) DialOption {
 	return func(c *dialConfig) { c.readLimit = n }
 }
 
-// WithDialReceiveBuffer bounds the per-stream inbound MSG queue on the client.
-// See WithReceiveBuffer. n<=0 keeps the default.
+// WithDialReceiveBuffer is DEPRECATED and has no effect. See WithReceiveBuffer:
+// the per-stream inbound backlog is now byte-bounded by the flow-control window.
 func WithDialReceiveBuffer(n int) DialOption {
 	return func(c *dialConfig) {
 		if n > 0 {

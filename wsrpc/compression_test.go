@@ -12,7 +12,7 @@ import (
 )
 
 func TestCompressionRoundTrip(t *testing.T) {
-	srv := NewServer(WithCompression(CompressionContextTakeover))
+	srv := NewServer(WithInsecureSkipOriginCheck(), WithCompression(CompressionContextTakeover))
 	srv.Register("/t/Echo", func(ctx context.Context, s *Stream) error {
 		var v wrapperspb.StringValue
 		if err := s.Recv(&v); err != nil && err != io.EOF {

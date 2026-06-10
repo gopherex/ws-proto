@@ -38,10 +38,19 @@ func (s *Server) Register(method string, h Handler) {
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// Fail closed on origin policy: an operator must make an explicit choice via
+	// WithOriginPatterns (restrict) or WithInsecureSkipOriginCheck (allow all).
+	// With neither, every upgrade is rejected rather than silently accepting
+	// cross-origin clients (CSRF / cross-site WebSocket hijacking defense).
+	if len(s.cfg.originPatterns) == 0 && !s.cfg.insecureSkipOrigin {
+		http.Error(w, "wsrpc: origin policy not configured (use WithOriginPatterns or WithInsecureSkipOriginCheck)", http.StatusForbidden)
+		return
+	}
 	c, err := websocket.Accept(w, r, &websocket.AcceptOptions{
-		Subprotocols:    []string{Subprotocol},
-		OriginPatterns:  s.cfg.originPatterns,
-		CompressionMode: s.cfg.compression,
+		Subprotocols:       []string{Subprotocol},
+		OriginPatterns:     s.cfg.originPatterns,
+		InsecureSkipVerify: s.cfg.insecureSkipOrigin,
+		CompressionMode:    s.cfg.compression,
 	})
 	if err != nil {
 		return
@@ -51,7 +60,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		base = s.cfg.connContext(base, r)
 	}
 	conn := newWSConn(c, s.cfg.readLimit)
-	mux := newMuxConfig(base, conn, func(stream *Stream) { go s.serveStream(stream) }, s.cfg.receiveBuffer, s.cfg.initialWindow)
+	mux := newMuxConfig(base, conn, func(stream *Stream) { go s.serveStream(stream) }, s.cfg.receiveBuffer, s.cfg.initialWindow, s.cfg.maxStreams)
 	mux.startKeepalive(s.cfg.keepalive, s.cfg.keepaliveTimeout)
 	<-mux.ctx.Done()
 	if err := c.Close(websocket.StatusNormalClosure, ""); err != nil {

@@ -18,7 +18,9 @@ export class FakeSocket implements WebSocketLike {
   onclose: ((ev: unknown) => void) | null = null;
   onerror: ((ev: unknown) => void) | null = null;
 
-  /** The negotiated subprotocol; defaults to "" matching the browser WebSocket default. */
+  /** The negotiated subprotocol; defaults to the wsrpc subprotocol so the mux's
+   * handshake validation passes. Pass { protocol: "" } to simulate a server that
+   * failed to negotiate it. */
   readonly protocol: string;
 
   /** Raw bytes the client has sent (in order). */
@@ -31,7 +33,7 @@ export class FakeSocket implements WebSocketLike {
   private isClosed = false;
 
   constructor(opts: { autoOpen?: boolean; protocol?: string } = {}) {
-    this.protocol = opts.protocol ?? "";
+    this.protocol = opts.protocol ?? "wsrpc.v1";
     if (opts.autoOpen !== false) {
       // Open after the current synchronous setup so onopen is registered.
       queueMicrotask(() => this.open());

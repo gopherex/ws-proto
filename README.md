@@ -66,10 +66,17 @@ a well-behaved sender can't overrun a slow receiver:
   default. Mixing a windowed peer with a non-windowed one can stall a sender once
   the initial window is exhausted, so ship both sides together.
 
-The bounded **receive buffer** (`WithReceiveBuffer` / `maxReceiveQueue`) remains
-a **backstop**: a misbehaving peer that ignores the window still can't grow
-memory without limit — its stream is reset with `ResourceExhausted`. A
-well-behaved peer never hits it.
+The **receive backlog** is a **backstop** bounded by **bytes**, aligned with the
+window: a misbehaving peer that ignores the window can't grow memory without
+limit — its stream is reset with `ResourceExhausted` — while a well-behaved peer
+(which may have many tiny frames but ≤ a window of bytes in flight) never hits
+it. The **send backlog** of unsent `send()` data is likewise bounded (TS
+`maxSendBuffer`, default 16 MiB): a caller that floods `send()` while a stalled
+peer withholds credit aborts its own stream rather than buffering without limit.
+
+> `WithReceiveBuffer` / `WithDialReceiveBuffer` (Go) and `maxReceiveQueue` (TS)
+> are **deprecated no-ops** — the old frame-count bound was replaced by the
+> byte-based bound above.
 
 ---
 
@@ -173,9 +180,14 @@ npx buf generate   # emits *_pb.ts (messages) and *_ws_pb.ts (clients)
 
 ```go
 srv := wsrpc.NewServer(
-    // Restrict browser origins (CSRF). Use your real frontend origins;
-    // "*" disables the check — only safe if auth is enforced on the Upgrade request.
+    // REQUIRED: an origin policy. The server fails closed — it rejects every
+    // upgrade (HTTP 403) unless you choose one of:
+    //   WithOriginPatterns("app.example.com")  // restrict browser origins (CSRF defense)
+    //   WithInsecureSkipOriginCheck()          // accept any origin (only if auth gates the Upgrade)
     wsrpc.WithOriginPatterns("app.example.com"),
+    // Cap concurrent server streams per connection (default 1000); excess OPENs
+    // are rejected with codes.ResourceExhausted. 0 disables (unlimited).
+    wsrpc.WithMaxConcurrentStreams(1000),
     // Active keepalive pings keep the connection alive through proxy idle timeouts.
     wsrpc.WithKeepalive(20*time.Second, 10*time.Second),
     // Read auth/tenant info off the proxy-visible Upgrade request headers.
@@ -451,9 +463,13 @@ location /rpc {
   request headers** — set them client-side with `wsrpc.WithHeader(...)` and read
   them server-side with `wsrpc.WithConnContext(...)`. These are visible to proxies
   for routing/authorization; per-RPC metadata stays in-band and is not.
-- Set `wsrpc.WithOriginPatterns(...)` to your real frontend origins. The default
-  Origin check rejects cross-origin browser handshakes (correct CSRF behavior);
-  `"*"` disables it and is only safe when auth is enforced on the Upgrade request.
+- The server **fails closed** on origin policy: it rejects every upgrade (HTTP
+  403) unless you set `wsrpc.WithOriginPatterns(...)` (your real frontend origins;
+  correct CSRF behavior) **or** `wsrpc.WithInsecureSkipOriginCheck()` (accept any
+  origin — only safe when auth gates the Upgrade request). Use `"*"` as a pattern
+  to allow any origin while still satisfying the policy gate.
+- The client validates the negotiated `wsrpc.v1` subprotocol after the handshake
+  and rejects a connection where the server (or a proxy) failed to select it.
 - Trust `X-Forwarded-For` / `X-Forwarded-Proto` only when set by a proxy you control.
 
 ---

@@ -1,4 +1,4 @@
-import { Mux } from "./mux.js";
+import { Mux, SUBPROTOCOL } from "./mux.js";
 import type { WebSocketLike, StreamInit } from "./mux.js";
 import type { ClientStream } from "./stream.js";
 
@@ -6,11 +6,11 @@ export type { WebSocketLike, StreamInit };
 
 /**
  * SUBPROTOCOL is the WebSocket subprotocol token offered during the RFC 6455
- * handshake (`Sec-WebSocket-Protocol: wsrpc.v1`). The server selects this token
- * to confirm it speaks the same framing protocol, and intermediary proxies can
- * use it for traffic identification and routing.
+ * handshake (`Sec-WebSocket-Protocol: wsrpc.v1`). The server must echo this
+ * token; the client rejects a connection that negotiated anything else. Defined
+ * in mux.ts and re-exported here for the public API surface.
  */
-export const SUBPROTOCOL = "wsrpc.v1";
+export { SUBPROTOCOL };
 
 /** Reconnect backoff defaults (full jitter applied on top). */
 const DEFAULT_RECONNECT_INITIAL_MS = 100;
@@ -20,9 +20,9 @@ const RECONNECT_FACTOR = 2;
 /**
  * WsTransportOptions tunes a transport instance.
  *
- * maxReceiveQueue bounds the per-stream inbound MSG backlog. A consumer too slow
- * to keep its queue under this bound has its stream reset
- * (CODE_RESOURCE_EXHAUSTED) instead of buffering without limit. Defaults to 256.
+ * maxReceiveQueue is DEPRECATED and ignored. The per-stream inbound backlog is
+ * now bounded by BYTES, aligned with initialWindow, rather than by a fixed frame
+ * count — so a peer that obeys the flow-control window is never falsely reset.
  *
  * reconnect (opt-in) makes the transport redial on connection loss with
  * exponential backoff + jitter. In-flight streams still fail with
@@ -45,6 +45,21 @@ export interface WsTransportOptions {
    * ignore the window.
    */
   initialWindow?: number;
+  /**
+   * maxSendBuffer bounds the unsent outbound backlog of each stream in bytes
+   * (default 16 MiB). A stream that buffers more than this via send() while the
+   * peer withholds flow-control credit is aborted (CODE_RESOURCE_EXHAUSTED)
+   * rather than growing without limit. Much larger than the window: normal
+   * buffering of many queued messages is unaffected.
+   */
+  maxSendBuffer?: number;
+  /**
+   * maxFrameBytes optionally caps the size of an inbound WebSocket message in
+   * bytes. A message larger than this fails the connection (the browser
+   * WebSocket has no built-in size limit, so without this a hostile server could
+   * push an enormous frame and exhaust memory). Default: unset (no cap).
+   */
+  maxFrameBytes?: number;
   reconnect?: boolean;
   backoff?: { initialMs?: number; maxMs?: number };
   createSocket?: (url: string) => WebSocketLike;
@@ -59,6 +74,8 @@ export class WsTransport {
   private mux: Mux;
   private readonly maxReceiveQueue?: number;
   private readonly initialWindow?: number;
+  private readonly maxSendBuffer?: number;
+  private readonly maxFrameBytes?: number;
 
   // Reconnect machinery (active only when reconnect is enabled and the transport
   // owns dialing, i.e. not via fromSocket).
@@ -85,6 +102,8 @@ export class WsTransport {
 
     this.maxReceiveQueue = opts?.maxReceiveQueue;
     this.initialWindow = opts?.initialWindow;
+    this.maxSendBuffer = opts?.maxSendBuffer;
+    this.maxFrameBytes = opts?.maxFrameBytes;
     this.createSocket =
       opts?.createSocket ??
       ((u: string) => new WebSocket(u, SUBPROTOCOL) as unknown as WebSocketLike);
@@ -98,7 +117,13 @@ export class WsTransport {
     if (fromExisting === true) {
       // fromSocket: wrap the given socket and never reconnect (it doesn't own it).
       this.reconnectEnabled = false;
-      this.mux = new Mux(urlOrSocket as WebSocketLike, this.maxReceiveQueue, this.initialWindow);
+      this.mux = new Mux(
+        urlOrSocket as WebSocketLike,
+        this.maxReceiveQueue,
+        this.initialWindow,
+        this.maxSendBuffer,
+        this.maxFrameBytes,
+      );
       return;
     }
 
@@ -116,7 +141,13 @@ export class WsTransport {
   /** connect opens a fresh socket+mux and, when reconnect is on, wires the redial hook. */
   private connect(): Mux {
     const ws = this.createSocket(this.url as string);
-    const mux = new Mux(ws, this.maxReceiveQueue, this.initialWindow);
+    const mux = new Mux(
+      ws,
+      this.maxReceiveQueue,
+      this.initialWindow,
+      this.maxSendBuffer,
+      this.maxFrameBytes,
+    );
     if (this.reconnectEnabled) {
       // A successful new socket resets the backoff once it actually opens.
       ws.onopen = ((prev) => () => {

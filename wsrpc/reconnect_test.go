@@ -50,7 +50,7 @@ func (l *trackingListener) dropAll() {
 // Canceled / Unknown). This holds without reconnect enabled.
 func TestInFlightFailsUnavailableOnDisconnect(t *testing.T) {
 	started := make(chan struct{})
-	srv := NewServer(WithKeepalive(0, 0))
+	srv := NewServer(WithInsecureSkipOriginCheck(), WithKeepalive(0, 0))
 	srv.Register("/t/Hang", func(ctx context.Context, s *Stream) error {
 		close(started)
 		<-ctx.Done() // never reply; hold the stream open
@@ -91,7 +91,7 @@ func TestInFlightFailsUnavailableOnDisconnect(t *testing.T) {
 // on in-flight streams (distinguishable from a transport drop).
 func TestUserCloseMapsCanceled(t *testing.T) {
 	started := make(chan struct{})
-	srv := NewServer()
+	srv := NewServer(WithInsecureSkipOriginCheck())
 	srv.Register("/t/Hang", func(ctx context.Context, s *Stream) error {
 		close(started)
 		<-ctx.Done()
@@ -203,7 +203,7 @@ func (rs *restartableServer) close() {
 // connection installed by the reconnect controller.
 func TestReconnectResumesService(t *testing.T) {
 	echo := func() http.Handler {
-		srv := NewServer(WithKeepalive(0, 0))
+		srv := NewServer(WithInsecureSkipOriginCheck(), WithKeepalive(0, 0))
 		srv.Register("/t/Echo", func(ctx context.Context, s *Stream) error {
 			var v wrapperspb.StringValue
 			if err := s.Recv(&v); err != nil && err.Error() != "EOF" {
@@ -267,7 +267,7 @@ func TestReconnectResumesService(t *testing.T) {
 // promptly and does not leak the controller goroutine. The server is down so the
 // controller is stuck in its backoff/redial loop when Close fires.
 func TestCloseStopsReconnect(t *testing.T) {
-	srv := NewServer(WithKeepalive(0, 0))
+	srv := NewServer(WithInsecureSkipOriginCheck(), WithKeepalive(0, 0))
 	srv.Register("/t/Echo", func(ctx context.Context, s *Stream) error { return nil })
 	rs := newRestartableServer(t, srv)
 

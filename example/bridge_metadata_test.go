@@ -38,7 +38,7 @@ func (mdImpl) ServerStream(req *echov1.ServerStreamRequest, stream grpc.ServerSt
 // metadata set on the grpc.ServerStream (SendHeader/SetTrailer) reaches the
 // wsrpc client as a leading header and trailer respectively.
 func TestBridgeStreamingMetadataPropagates(t *testing.T) {
-	srv := wsrpc.NewServer()
+	srv := wsrpc.NewServer(wsrpc.WithInsecureSkipOriginCheck())
 	echov1.RegisterEchoServiceHandler(srv, echov1.EchoServiceFromGRPC(mdImpl{}))
 
 	hs := httptest.NewServer(srv)
@@ -83,7 +83,7 @@ func (unaryMDImpl) Unary(ctx context.Context, req *echov1.UnaryRequest) (*echov1
 // The generated unary client returns only the response, so the test drives the
 // underlying wsrpc stream directly to observe Header()/Trailer().
 func TestUnaryNativeMetadataPropagates(t *testing.T) {
-	srv := wsrpc.NewServer()
+	srv := wsrpc.NewServer(wsrpc.WithInsecureSkipOriginCheck())
 	echov1.RegisterEchoServiceHandler(srv, unaryMDImpl{})
 
 	hs := httptest.NewServer(srv)
@@ -129,7 +129,7 @@ func TestBridgeUnaryInterceptorMetadataPropagates(t *testing.T) {
 		return handler(ctx, req)
 	}
 
-	srv := wsrpc.NewServer()
+	srv := wsrpc.NewServer(wsrpc.WithInsecureSkipOriginCheck())
 	echov1.RegisterEchoServiceHandler(srv,
 		echov1.EchoServiceFromGRPC(unaryInterceptorImpl{}, wsrpc.WithUnaryInterceptor(interceptor)))
 

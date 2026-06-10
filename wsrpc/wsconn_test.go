@@ -12,7 +12,7 @@ import (
 )
 
 func TestWebSocketLoopback(t *testing.T) {
-	srv := NewServer()
+	srv := NewServer(WithInsecureSkipOriginCheck())
 	srv.Register("/t/Echo", func(ctx context.Context, s *Stream) error {
 		var v wrapperspb.StringValue
 		if err := s.Recv(&v); err != nil && err != io.EOF {

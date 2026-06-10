@@ -5,7 +5,20 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/gopherex/ws-proto/transport"
+	"google.golang.org/grpc/codes"
 )
+
+// verifySubprotocol fails the connection unless the server selected the wsrpc
+// subprotocol during the handshake. A mismatch (empty or other value) means the
+// peer — or an intermediary proxy that stripped Sec-WebSocket-Protocol — is not
+// speaking this framing protocol, so every frame would be mis-interpreted.
+func verifySubprotocol(c *websocket.Conn) error {
+	if got := c.Subprotocol(); got != Subprotocol {
+		_ = c.Close(websocket.StatusProtocolError, "wsrpc: subprotocol not negotiated")
+		return Errorf(codes.Unavailable, "wsrpc: server did not negotiate subprotocol %q (got %q)", Subprotocol, got)
+	}
+	return nil
+}
 
 // wsConn adapts a coder/websocket connection to frameConn.
 type wsConn struct {

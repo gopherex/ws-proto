@@ -1,5 +1,5 @@
 import { encodeFrame, decodeFrame, Kind } from "./frame.js";
-import { StreamImpl, DEFAULT_INITIAL_WINDOW } from "./stream.js";
+import { StreamImpl, DEFAULT_INITIAL_WINDOW, DEFAULT_MAX_SEND_BUFFER } from "./stream.js";
 import {
   WsStatusError,
   statusErrorFromProto,
@@ -11,11 +11,19 @@ import {
 } from "./status.js";
 
 /**
- * DEFAULT_MAX_RECEIVE_QUEUE bounds the per-stream inbound MSG backlog. A slower
- * consumer that lets its queue exceed this is reset (CODE_RESOURCE_EXHAUSTED)
- * rather than buffering without limit.
+ * DEFAULT_MAX_RECEIVE_QUEUE is retained for API compatibility only. The
+ * per-stream inbound backlog is now bounded by BYTES (aligned with the
+ * flow-control window), not by this frame count.
  */
 export const DEFAULT_MAX_RECEIVE_QUEUE = 256;
+
+/**
+ * MAX_PREOPEN_BUFFER_BYTES bounds how much frame data the mux buffers before its
+ * socket opens (or during a reconnect gap). Past this, the connection is failed
+ * rather than buffering without limit — a safety net against a producer that
+ * keeps sending while the socket never opens.
+ */
+const MAX_PREOPEN_BUFFER_BYTES = 4 * 1024 * 1024; // 4 MiB
 
 export { DEFAULT_INITIAL_WINDOW } from "./stream.js";
 
@@ -57,6 +65,13 @@ export interface WebSocketLike {
 const WS_OPEN = 1;
 
 /**
+ * SUBPROTOCOL is the WebSocket subprotocol the client offers and the server must
+ * echo. Defined here (rather than in transport.ts) so the Mux can validate the
+ * negotiated value without importing transport.ts (which would be a cycle).
+ */
+export const SUBPROTOCOL = "wsrpc.v1";
+
+/**
  * Mux owns one WebSocketLike and multiplexes many streams over it. Client only:
  * it allocates monotonic ODD stream ids (1, 3, 5, ...) and never reacts to OPEN.
  */
@@ -64,11 +79,18 @@ export class Mux {
   private readonly ws: WebSocketLike;
   private readonly streams = new Map<number, StreamImpl>();
   private nextId = 1;
-  private readonly maxReceiveQueue: number;
   private readonly initialWindow: number;
+  /** Byte ceiling for a stream's inbound backlog (aligned with the window). */
+  private readonly maxRecvBytes: number;
+  /** Byte ceiling for a stream's unsent outbound backlog. */
+  private readonly maxSendBuffer: number;
+  /** Optional cap (bytes) on a single inbound message; 0 disables it. */
+  private readonly maxFrameBytes: number;
 
   /** Frames produced before the socket reaches OPEN are buffered here. */
   private readonly sendBuffer: Uint8Array[] = [];
+  /** Total bytes currently held in sendBuffer (bounded by MAX_PREOPEN_BUFFER_BYTES). */
+  private sendBufferBytes = 0;
   private open = false;
   private closed = false;
   /** Fired once when the socket drops (not via close()); used to drive reconnect. */
@@ -78,18 +100,28 @@ export class Mux {
     ws: WebSocketLike,
     maxReceiveQueue: number = DEFAULT_MAX_RECEIVE_QUEUE,
     initialWindow: number = DEFAULT_INITIAL_WINDOW,
+    maxSendBuffer: number = DEFAULT_MAX_SEND_BUFFER,
+    maxFrameBytes = 0,
   ) {
     this.ws = ws;
-    this.maxReceiveQueue = maxReceiveQueue > 0 ? maxReceiveQueue : DEFAULT_MAX_RECEIVE_QUEUE;
+    void maxReceiveQueue; // deprecated frame-count bound; retained for API compat
     this.initialWindow = initialWindow > 0 ? initialWindow : DEFAULT_INITIAL_WINDOW;
+    this.maxRecvBytes = this.initialWindow;
+    this.maxSendBuffer = maxSendBuffer > 0 ? maxSendBuffer : DEFAULT_MAX_SEND_BUFFER;
+    this.maxFrameBytes = maxFrameBytes > 0 ? maxFrameBytes : 0;
     this.ws.binaryType = "arraybuffer";
 
     // If the socket is already open (e.g. fromSocket on a live socket), flush.
     if ((this.ws as { readyState?: number }).readyState === WS_OPEN) {
-      this.open = true;
+      if (this.validateProtocol()) {
+        this.open = true;
+      }
     }
 
     this.ws.onopen = () => {
+      if (!this.validateProtocol()) {
+        return;
+      }
       this.open = true;
       this.flush();
     };
@@ -104,6 +136,34 @@ export class Mux {
   /** setOnDisconnect registers a one-shot callback fired when the socket drops. */
   setOnDisconnect(fn: () => void): void {
     this.onDisconnect = fn;
+  }
+
+  /**
+   * validateProtocol verifies the server selected the wsrpc subprotocol. A
+   * mismatch (empty or other value) means the peer or an intermediary proxy is
+   * not speaking this framing protocol, so all frames would be mis-interpreted.
+   * It permanently fails the connection (no reconnect — the misconfiguration
+   * would just recur) and returns false. Returns true when the protocol is
+   * absent (a minimal WebSocketLike that does not expose it) or matches.
+   */
+  private validateProtocol(): boolean {
+    const p = this.ws.protocol;
+    if (p !== undefined && p !== SUBPROTOCOL) {
+      this.closed = true; // terminal: suppress reconnect and further sends
+      this.failAll(
+        new WsStatusError(
+          CODE_UNAVAILABLE,
+          `server did not negotiate subprotocol "${SUBPROTOCOL}" (got "${p}")`,
+        ),
+      );
+      try {
+        this.ws.close(1002, "subprotocol not negotiated");
+      } catch {
+        // closing an already-closed socket is fine
+      }
+      return false;
+    }
+    return true;
   }
 
   private onTransportDrop(): void {
@@ -138,6 +198,7 @@ export class Mux {
           ),
       },
       this.initialWindow,
+      this.maxSendBuffer,
     );
     this.streams.set(id, stream);
 
@@ -181,7 +242,20 @@ export class Mux {
       this.ws.send(bytes);
       return;
     }
+    // Pre-open backlog: bound it so a producer that keeps sending while the
+    // socket never opens fails the connection instead of growing without limit.
+    if (this.sendBufferBytes + bytes.length > MAX_PREOPEN_BUFFER_BYTES) {
+      this.closed = true;
+      this.failAll(new WsStatusError(CODE_UNAVAILABLE, "send buffer overflow before connect"));
+      try {
+        this.ws.close(1011, "send buffer overflow");
+      } catch {
+        // closing an already-closed socket is fine
+      }
+      return;
+    }
     this.sendBuffer.push(bytes);
+    this.sendBufferBytes += bytes.length;
   }
 
   private flush(): void {
@@ -192,6 +266,7 @@ export class Mux {
       this.ws.send(bytes);
     }
     this.sendBuffer.length = 0;
+    this.sendBufferBytes = 0;
   }
 
   /** handleMessage decodes one inbound binary WS message and routes by stream id. */
@@ -199,6 +274,18 @@ export class Mux {
     const bytes = toUint8Array(data);
     if (bytes === null) {
       return; // ignore non-binary frames
+    }
+    // Optional inbound size cap: the browser WebSocket has no built-in limit, so
+    // reject an over-large message before decoding it and fail the connection.
+    if (this.maxFrameBytes > 0 && bytes.length > this.maxFrameBytes) {
+      this.closed = true;
+      this.failAll(new WsStatusError(CODE_RESOURCE_EXHAUSTED, "inbound frame exceeds maxFrameBytes"));
+      try {
+        this.ws.close(1009, "message too big");
+      } catch {
+        // closing an already-closed socket is fine
+      }
+      return;
     }
     const frame = decodeFrame(bytes);
 
@@ -234,11 +321,15 @@ export class Mux {
         if (!s) {
           return;
         }
-        // Bound the per-stream backlog: a consumer too slow to keep its queue
-        // under maxReceiveQueue is reset rather than buffering without limit.
-        // abort() rejects pending recv()/iteration with the error and, via its
-        // reset hook, both writes an RST to the peer and detaches the stream.
-        if (s.queuedCount() >= this.maxReceiveQueue) {
+        // Bound the per-stream backlog by BYTES (aligned with the flow-control
+        // window), not by frame count: a peer that obeys the window never has
+        // more than ~initialWindow unconsumed bytes, so it is never falsely
+        // reset; a peer that IGNORES the window overruns the byte ceiling and is
+        // reset. The check is "already over" so at least one message — even an
+        // oversized one — is always admitted (mirrors the send side). abort()
+        // rejects pending recv()/iteration and, via its reset hook, writes an
+        // RST to the peer and detaches the stream.
+        if (s.queuedBytes() > this.maxRecvBytes) {
           s.abort(new WsStatusError(CODE_RESOURCE_EXHAUSTED, "receive buffer overflow"));
           this.streams.delete(frame.streamId); // idempotent; abort already detached
           return;

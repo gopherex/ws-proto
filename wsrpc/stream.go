@@ -34,9 +34,17 @@ type Stream struct {
 	headerSent bool              // a leading KIND_HEADER frame was sent
 	msgSent    bool              // at least one response MSG was sent
 
-	recvCh     chan *transport.Frame // bounded inbound MSG queue, routed by the mux
-	halfClosed chan struct{}         // closed once when peer half-closes (inbound)
-	ended      chan struct{}         // closed once when a terminal END/RST arrives
+	// Inbound MSG backlog, bounded by BYTES (not frame count) so a peer that
+	// obeys the flow-control window is never falsely reset: with tiny messages a
+	// well-behaved sender may have many frames but at most ~initialWindow bytes
+	// in flight. recvItems/recvBytes are guarded by mu; recvSignal (cap 1) wakes
+	// a parked Recv when a frame is enqueued. maxRecvBytes is the byte ceiling.
+	recvItems    []*transport.Frame
+	recvBytes    int
+	maxRecvBytes int
+	recvSignal   chan struct{}
+	halfClosed   chan struct{} // closed once when peer half-closes (inbound)
+	ended        chan struct{} // closed once when a terminal END/RST arrives
 
 	sendDone     bool // guarded by mu
 	halfCloseOne sync.Once
@@ -55,10 +63,7 @@ type Stream struct {
 	pendingCredit int
 }
 
-func newStream(ctx context.Context, mux *Mux, id uint32, method string, recvBuffer, initialWindow int) *Stream {
-	if recvBuffer <= 0 {
-		recvBuffer = defaultReceiveBuffer
-	}
+func newStream(ctx context.Context, mux *Mux, id uint32, method string, initialWindow int) *Stream {
 	if initialWindow <= 0 {
 		initialWindow = defaultInitialWindow
 	}
@@ -69,7 +74,8 @@ func newStream(ctx context.Context, mux *Mux, id uint32, method string, recvBuff
 		mux:           mux,
 		ctx:           c,
 		cancel:        cancel,
-		recvCh:        make(chan *transport.Frame, recvBuffer),
+		maxRecvBytes:  initialWindow,
+		recvSignal:    make(chan struct{}, 1),
 		halfClosed:    make(chan struct{}),
 		ended:         make(chan struct{}),
 		initialWindow: initialWindow,
@@ -276,32 +282,53 @@ func (s *Stream) returnCredit(n int) {
 	})
 }
 
+// popRecv removes and returns the oldest buffered MSG frame, or nil if the
+// backlog is empty. It also releases the frame's bytes from the byte bound.
+func (s *Stream) popRecv() *transport.Frame {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.recvItems) == 0 {
+		return nil
+	}
+	f := s.recvItems[0]
+	s.recvItems[0] = nil
+	s.recvItems = s.recvItems[1:]
+	s.recvBytes -= len(f.Payload)
+	return f
+}
+
 // Recv waits for the next MSG and unmarshals into msg. Returns io.EOF on a
 // clean END, or the *Status as error on a non-OK END / RST.
 func (s *Stream) Recv(msg proto.Message) error {
-	// Prefer any already-buffered MSG so terminal/half-close signals never
-	// preempt pending data (drain-first).
-	select {
-	case f := <-s.recvCh:
-		return s.deliverMsg(f, msg)
-	default:
-	}
-	select {
-	case f := <-s.recvCh:
-		return s.deliverMsg(f, msg)
-	case <-s.halfClosed:
-		return io.EOF
-	case <-s.ended:
-		return s.recvEnded(msg)
-	case <-s.ctx.Done():
-		// A terminal frame may have closed ctx via failWith/applyEnd; surface a
-		// recorded END/RST in preference to the bare context error.
+	for {
+		// Prefer any already-buffered MSG so terminal/half-close signals never
+		// preempt pending data (drain-first).
+		if f := s.popRecv(); f != nil {
+			return s.deliverMsg(f, msg)
+		}
 		select {
+		case <-s.recvSignal:
+			// A frame was enqueued (or a spurious wake): loop and try to pop it.
+		case <-s.halfClosed:
+			if f := s.popRecv(); f != nil {
+				return s.deliverMsg(f, msg)
+			}
+			return io.EOF
 		case <-s.ended:
 			return s.recvEnded(msg)
-		default:
+		case <-s.ctx.Done():
+			// A terminal frame may have closed ctx via failWith/applyEnd; surface a
+			// recorded END/RST in preference to the bare context error.
+			select {
+			case <-s.ended:
+				return s.recvEnded(msg)
+			default:
+			}
+			if f := s.popRecv(); f != nil {
+				return s.deliverMsg(f, msg)
+			}
+			return s.ctx.Err()
 		}
-		return s.ctx.Err()
 	}
 }
 
@@ -309,10 +336,8 @@ func (s *Stream) Recv(msg proto.Message) error {
 // still buffered are delivered first; only when the queue is empty is the
 // terminal status returned.
 func (s *Stream) recvEnded(msg proto.Message) error {
-	select {
-	case f := <-s.recvCh:
+	if f := s.popRecv(); f != nil {
 		return s.deliverMsg(f, msg)
-	default:
 	}
 	s.mu.Lock()
 	f := s.endFrame
@@ -364,6 +389,10 @@ func (s *Stream) CloseSend() error {
 }
 
 // end is called by the server side to finish a stream with a status + trailers.
+// It writes with the MUX context, not the stream context: a stream that ends
+// BECAUSE its deadline fired has an already-cancelled s.ctx, and writing the
+// terminal END with it would drop the frame so the client never learns the
+// final status. The mux context stays live until the connection itself drops.
 func (s *Stream) end(st *Status, trailers map[string]string) error {
 	f := &transport.Frame{
 		StreamId: s.id,
@@ -371,7 +400,7 @@ func (s *Stream) end(st *Status, trailers map[string]string) error {
 		Headers:  trailers,
 		Status:   statusToProto(st),
 	}
-	return s.mux.write(s.ctx, f)
+	return s.mux.write(s.mux.ctx, f)
 }
 
 func (s *Stream) applyEnd(f *transport.Frame) *Status {
@@ -400,16 +429,37 @@ func (s *Stream) failWith(err error) {
 }
 
 // tryDeliver enqueues a MSG frame without ever blocking the read loop. It
-// returns false only when the bounded buffer is full (the consumer is too
-// slow), which the mux turns into a stream reset.
+// returns false only when the byte-bounded backlog is already over its ceiling
+// (a peer ignoring the flow-control window), which the mux turns into a stream
+// reset. The check is "already over" rather than "would exceed": this always
+// admits at least one message even if it is larger than the whole window
+// (mirroring the send side's allowance), and a window-obeying peer — whose
+// unconsumed bytes never exceed the window before it must stop for credit —
+// never trips it.
 func (s *Stream) tryDeliver(f *transport.Frame) bool {
-	select {
-	case s.recvCh <- f:
-		return true
-	case <-s.ctx.Done():
+	s.mu.Lock()
+	if s.ctx.Err() != nil {
+		s.mu.Unlock()
 		return true // stream already ending; dropping the frame is fine
-	default:
+	}
+	if len(s.recvItems) > 0 && s.recvBytes > s.maxRecvBytes {
+		s.mu.Unlock()
 		return false
+	}
+	s.recvItems = append(s.recvItems, f)
+	s.recvBytes += len(f.Payload)
+	s.mu.Unlock()
+	s.signalRecv()
+	return true
+}
+
+// signalRecv wakes a parked Recv. The signal channel has capacity 1 and the send
+// is non-blocking: a pending wake already covers any number of enqueues, and
+// Recv re-checks the backlog after each wake.
+func (s *Stream) signalRecv() {
+	select {
+	case s.recvSignal <- struct{}{}:
+	default:
 	}
 }
 

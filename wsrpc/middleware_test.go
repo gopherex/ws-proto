@@ -37,7 +37,7 @@ func TestChainOrder(t *testing.T) {
 // dialWithServer spins up a real WS server with the given options and returns a client conn.
 func dialWithServer(t *testing.T, register func(*Server), opts ...ServerOption) *ClientConn {
 	t.Helper()
-	srv := NewServer(opts...)
+	srv := NewServer(append([]ServerOption{WithInsecureSkipOriginCheck()}, opts...)...)
 	register(srv)
 	hs := httptest.NewServer(srv)
 	t.Cleanup(hs.Close)

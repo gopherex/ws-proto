@@ -22,7 +22,7 @@ func TestCallHeaderCrossesWire(t *testing.T) {
 			return next(ctx, stream)
 		}
 	}
-	srv := wsrpc.NewServer(wsrpc.WithMiddleware(mw))
+	srv := wsrpc.NewServer(wsrpc.WithInsecureSkipOriginCheck(), wsrpc.WithMiddleware(mw))
 	echov1.RegisterEchoServiceHandler(srv, impl{})
 
 	hs := httptest.NewServer(srv)
@@ -62,7 +62,7 @@ func TestDeadlineCrossesWire(t *testing.T) {
 			return next(ctx, stream)
 		}
 	}
-	srv := wsrpc.NewServer(wsrpc.WithMiddleware(mw))
+	srv := wsrpc.NewServer(wsrpc.WithInsecureSkipOriginCheck(), wsrpc.WithMiddleware(mw))
 	echov1.RegisterEchoServiceHandler(srv, impl{})
 
 	hs := httptest.NewServer(srv)

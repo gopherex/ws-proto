@@ -103,6 +103,13 @@ function printUnary(
   f.print("      throw new Error(", f.string(`${service.typeName}.${method.name}: server closed stream without a response`), ");");
   f.print("    }");
   f.print("    const message = ", fromBinary, "(", outSchema, ", bytes);");
+  f.print("    // Observe the terminal status: a well-formed single-response call is one");
+  f.print("    // MSG then a clean END. If the server ends with an error after the");
+  f.print("    // message, this recv() rejects so the error is surfaced, not swallowed.");
+  f.print("    const tail = await stream.recv();");
+  f.print("    if (tail !== null) {");
+  f.print("      throw new Error(", f.string(`${service.typeName}.${method.name}: server sent more than one response message`), ");");
+  f.print("    }");
   f.print("    if (options?.onTrailer) { options.onTrailer(await stream.responseHeaders()); }");
   f.print("    return message;");
   f.print("  }");
@@ -161,6 +168,13 @@ function printClientStreaming(
   f.print("      throw new Error(", f.string(`${service.typeName}.${method.name}: server closed stream without a response`), ");");
   f.print("    }");
   f.print("    const message = ", fromBinary, "(", outSchema, ", bytes);");
+  f.print("    // Observe the terminal status: a well-formed single-response call is one");
+  f.print("    // MSG then a clean END. If the server ends with an error after the");
+  f.print("    // message, this recv() rejects so the error is surfaced, not swallowed.");
+  f.print("    const tail = await stream.recv();");
+  f.print("    if (tail !== null) {");
+  f.print("      throw new Error(", f.string(`${service.typeName}.${method.name}: server sent more than one response message`), ");");
+  f.print("    }");
   f.print("    if (options?.onTrailer) { options.onTrailer(await stream.responseHeaders()); }");
   f.print("    return message;");
   f.print("  }");

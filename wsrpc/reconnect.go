@@ -184,8 +184,11 @@ func (r *reconnector) dialOnce() (*Mux, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := verifySubprotocol(c); err != nil {
+		return nil, err
+	}
 	conn := newWSConn(c, r.cfg.readLimit)
-	mux := newMuxConfig(context.Background(), conn, nil, r.cfg.receiveBuffer, r.cfg.initialWindow)
+	mux := newMuxConfig(context.Background(), conn, nil, r.cfg.receiveBuffer, r.cfg.initialWindow, 0)
 	mux.startKeepalive(r.cfg.keepalive, r.cfg.keepaliveTimeout)
 	return mux, nil
 }

@@ -75,15 +75,17 @@ func TestOverflowResetsSlowStream(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	const buf = 4
+	// Small receive window so a peer that ignores it overruns the byte-bounded
+	// backlog quickly. Each "x" message is a few bytes; 40 of them far exceed 32.
+	const window = 32
 	gotStream := make(chan *Stream, 1)
 	srvEnd, peer := newPipe()
-	_ = newMuxBuffered(ctx, srvEnd, func(s *Stream) { gotStream <- s }, buf)
+	_ = newMuxConfig(ctx, srvEnd, func(s *Stream) { gotStream <- s }, defaultReceiveBuffer, window, 0)
 
 	a := openServerStream(t, ctx, peer, gotStream, 1, "/t/A")
 
-	// Push well beyond capacity; the consumer never reads.
-	for i := 0; i < buf+8; i++ {
+	// Push well beyond the window in bytes; the consumer never reads.
+	for i := 0; i < 40; i++ {
 		require.NoError(t, peer.WriteFrame(ctx, &transport.Frame{StreamId: 1, Kind: transport.Kind_KIND_MSG, Payload: mustMarshalString(t, "x")}))
 	}
 

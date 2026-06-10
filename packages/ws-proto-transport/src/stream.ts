@@ -1,5 +1,5 @@
 import { AsyncQueue } from "./queue.js";
-import { WsStatusError } from "./status.js";
+import { WsStatusError, CODE_RESOURCE_EXHAUSTED } from "./status.js";
 
 /**
  * ClientStream is one multiplexed RPC from the client's perspective. It is
@@ -63,10 +63,24 @@ export interface StreamHooks {
 /** DEFAULT_INITIAL_WINDOW is the per-stream credit window (bytes) for flow control. */
 export const DEFAULT_INITIAL_WINDOW = 256 * 1024; // 256 KiB
 
+/**
+ * DEFAULT_MAX_SEND_BUFFER bounds the unsent outbound backlog of a single stream.
+ * It is deliberately much larger than the window: a caller may legitimately
+ * enqueue many messages with send() and let the pump drain them as credit
+ * arrives. This bound only catches a true runaway — a caller that keeps sending
+ * while a stalled/malicious peer never returns credit.
+ */
+export const DEFAULT_MAX_SEND_BUFFER = 16 * 1024 * 1024; // 16 MiB
+
 export class StreamImpl implements ClientStream {
   readonly id: number;
   private readonly hooks: StreamHooks;
   private readonly inbound = new AsyncQueue<Uint8Array>();
+  // Bytes buffered in `inbound` but not yet pulled by recv()/iteration. The mux
+  // bounds the backlog by THIS (not by frame count) so a peer that obeys the
+  // flow-control window — and may have many tiny frames but few bytes in flight
+  // — is never falsely reset.
+  private bufferedBytes = 0;
 
   // ---- Flow control (credit windowing) ----
   // The public send() is synchronous (void): it appends to outbound and a pump
@@ -78,6 +92,12 @@ export class StreamImpl implements ClientStream {
   private readonly initialWindow: number;
   private sendWindow: number;
   private readonly outbound: Uint8Array[] = [];
+  // Bytes buffered in `outbound` awaiting send-window credit. Bounded by
+  // maxSendBuffer so a caller that floods send() while the window is closed
+  // (peer not crediting) aborts its own stream instead of growing without limit.
+  private outboundBytes = 0;
+  private readonly maxSendBuffer: number;
+  // (maxSendBuffer is supplied by the mux; defaults to DEFAULT_MAX_SEND_BUFFER.)
   // Receiver side: bytes consumed by recv()/iteration but not yet returned to the
   // peer; flushed as one KIND_WINDOW_UPDATE once it crosses initialWindow/2.
   private pendingCredit = 0;
@@ -97,11 +117,17 @@ export class StreamImpl implements ClientStream {
   private readonly leadingPromise: Promise<Record<string, string>>;
   private leadingSettled = false;
 
-  constructor(id: number, hooks: StreamHooks, initialWindow: number = DEFAULT_INITIAL_WINDOW) {
+  constructor(
+    id: number,
+    hooks: StreamHooks,
+    initialWindow: number = DEFAULT_INITIAL_WINDOW,
+    maxSendBuffer: number = DEFAULT_MAX_SEND_BUFFER,
+  ) {
     this.id = id;
     this.hooks = hooks;
     this.initialWindow = initialWindow > 0 ? initialWindow : DEFAULT_INITIAL_WINDOW;
     this.sendWindow = this.initialWindow;
+    this.maxSendBuffer = maxSendBuffer > 0 ? maxSendBuffer : DEFAULT_MAX_SEND_BUFFER;
     // headersPromise only ever resolves (with trailers); the error status is
     // delivered through recv()/iteration, so there is no rejection path.
     this.headersPromise = new Promise<Record<string, string>>((resolve) => {
@@ -118,9 +144,18 @@ export class StreamImpl implements ClientStream {
     if (this.sendClosed || this.finished) {
       return;
     }
+    // Bound the outbound backlog: a caller that keeps sending while the window
+    // is closed (no credit from the peer) aborts its own stream rather than
+    // buffering without limit. The check is "already over" so at least one
+    // message — even one larger than the window — is always queued.
+    if (this.outboundBytes > this.maxSendBuffer) {
+      this.abort(new WsStatusError(CODE_RESOURCE_EXHAUSTED, "send buffer overflow"));
+      return;
+    }
     // Buffer and let the pump flush as the send window allows. Keeps the public
     // signature synchronous while honoring per-stream backpressure.
     this.outbound.push(payload);
+    this.outboundBytes += payload.length;
     this.pump();
   }
 
@@ -133,6 +168,7 @@ export class StreamImpl implements ClientStream {
   private pump(): void {
     while (this.outbound.length > 0 && this.sendWindow > 0 && !this.finished) {
       const payload = this.outbound.shift()!;
+      this.outboundBytes -= payload.length;
       this.sendWindow -= payload.length;
       this.hooks.sendMsg(this.id, payload);
     }
@@ -163,6 +199,7 @@ export class StreamImpl implements ClientStream {
     if (r.done) {
       return null;
     }
+    this.bufferedBytes -= r.value!.length;
     this.returnCredit(r.value!.length);
     return r.value!;
   }
@@ -202,6 +239,7 @@ export class StreamImpl implements ClientStream {
         if (r.done) {
           return { done: true, value: undefined };
         }
+        self.bufferedBytes -= r.value!.length;
         self.returnCredit(r.value!.length);
         return { done: false, value: r.value! };
       },
@@ -282,15 +320,16 @@ export class StreamImpl implements ClientStream {
   pushMsg(payload: Uint8Array): void {
     // The first message guarantees no leading header is coming; settle to {}.
     this.resolveLeading({});
+    this.bufferedBytes += payload.length;
     this.inbound.push(payload);
   }
 
   /**
-   * queuedCount reports how many inbound MSG payloads are buffered awaiting a
-   * recv(). The mux uses it to enforce the bounded receive queue.
+   * queuedBytes reports how many inbound MSG bytes are buffered awaiting a
+   * recv(). The mux uses it to enforce the byte-bounded receive backlog.
    */
-  queuedCount(): number {
-    return this.inbound.size();
+  queuedBytes(): number {
+    return this.bufferedBytes;
   }
 
   /** endOk is called by the mux on a clean END (status OK). Resolves recv()/iter to done. */

@@ -73,7 +73,9 @@ func main() {
 		addr = "127.0.0.1:8910"
 	}
 
-	srv := wsrpc.NewServer()
+	// Example only: accept any Origin. In production restrict browser clients
+	// with wsrpc.WithOriginPatterns("app.example.com") instead.
+	srv := wsrpc.NewServer(wsrpc.WithInsecureSkipOriginCheck())
 	echov1.RegisterEchoServiceHandler(srv, impl{})
 
 	ln, err := net.Listen("tcp", addr)

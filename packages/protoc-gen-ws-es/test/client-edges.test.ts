@@ -43,6 +43,18 @@ describe("generated client error edges", () => {
     await expect(p).rejects.toBeInstanceOf(WsStatusError);
   });
 
+  it("unary rejects when the server ends with an error AFTER sending a message", async () => {
+    const sock = new FakeSocket();
+    const client = new EchoServiceClient(WsTransport.fromSocket(sock));
+    const p = client.unary(create(UnaryRequestSchema, { name: "x" }));
+    await tick();
+    // A message followed by a non-OK END: the trailing error must NOT be
+    // swallowed by returning the message — the call rejects with the status.
+    sock.inject({ streamId: 1, kind: Kind.KIND_MSG, payload: new Uint8Array() });
+    sock.inject({ streamId: 1, kind: Kind.KIND_END, status: { code: 7, message: "denied" } });
+    await expect(p).rejects.toBeInstanceOf(WsStatusError);
+  });
+
   it("server-streaming surfaces a WsStatusError out of the for-await loop", async () => {
     const sock = new FakeSocket();
     const client = new EchoServiceClient(WsTransport.fromSocket(sock));

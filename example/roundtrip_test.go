@@ -64,7 +64,7 @@ func (impl) Bidi(ctx context.Context, stream *echov1.EchoService_BidiServerWS) e
 
 func dial(t *testing.T) echov1.EchoServiceWSClient {
 	t.Helper()
-	srv := wsrpc.NewServer()
+	srv := wsrpc.NewServer(wsrpc.WithInsecureSkipOriginCheck())
 	echov1.RegisterEchoServiceHandler(srv, impl{})
 
 	hs := httptest.NewServer(srv)
@@ -175,7 +175,7 @@ func (grpcImpl) Bidi(stream grpc.BidiStreamingServer[echov1.BidiRequest, echov1.
 
 func dialGRPC(t *testing.T) echov1.EchoServiceWSClient {
 	t.Helper()
-	srv := wsrpc.NewServer()
+	srv := wsrpc.NewServer(wsrpc.WithInsecureSkipOriginCheck())
 	echov1.RegisterEchoServiceHandler(srv, echov1.EchoServiceFromGRPC(grpcImpl{}))
 
 	hs := httptest.NewServer(srv)
@@ -264,7 +264,7 @@ func (r *recorder) snapshot() (unary, stream []string) {
 // dialGRPCOpts serves grpcImpl through the bridge with the given options.
 func dialGRPCOpts(t *testing.T, opts ...wsrpc.BridgeOption) echov1.EchoServiceWSClient {
 	t.Helper()
-	srv := wsrpc.NewServer()
+	srv := wsrpc.NewServer(wsrpc.WithInsecureSkipOriginCheck())
 	echov1.RegisterEchoServiceHandler(srv, echov1.EchoServiceFromGRPC(grpcImpl{}, opts...))
 
 	hs := httptest.NewServer(srv)

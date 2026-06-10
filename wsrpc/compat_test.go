@@ -48,7 +48,7 @@ func TestSubprotocolAndOptions(t *testing.T) {
 // TestReadLimitRejectsOversized verifies a tiny read limit fails the stream
 // rather than buffering an arbitrarily large frame.
 func TestReadLimitRejectsOversized(t *testing.T) {
-	srv := NewServer(WithReadLimit(64))
+	srv := NewServer(WithInsecureSkipOriginCheck(), WithReadLimit(64))
 	srv.Register("/t/Big", func(ctx context.Context, s *Stream) error {
 		var v wrapperspb.StringValue
 		// Reading the oversized frame should error (conn closed by read limit).
@@ -108,7 +108,7 @@ func TestKeepalivePings(t *testing.T) {
 func TestConnContextAuthHeader(t *testing.T) {
 	type authKey struct{}
 
-	srv := NewServer(WithConnContext(func(ctx context.Context, r *http.Request) context.Context {
+	srv := NewServer(WithInsecureSkipOriginCheck(), WithConnContext(func(ctx context.Context, r *http.Request) context.Context {
 		return context.WithValue(ctx, authKey{}, r.Header.Get("Authorization"))
 	}))
 	srv.Register("/t/Auth", func(ctx context.Context, s *Stream) error {
