@@ -1,6 +1,6 @@
 {
   "name": "@gopherex/protoc-gen-ws-es",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "type": "module",
   "description": "protoc/buf plugin emitting WebSocket transport clients for protobuf-es v2",
   "license": "MIT",
