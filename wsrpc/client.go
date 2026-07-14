@@ -81,13 +81,32 @@ func dialMux(ctx context.Context, url string, cfg dialConfig) (*Mux, error) {
 	return mux, nil
 }
 
-// newClientConn wraps an existing frameConn (used by tests over a pipe).
-func newClientConn(ctx context.Context, conn frameConn) *ClientConn {
-	return &ClientConn{
-		mux:     newMux(ctx, conn, nil),
-		waitCh:  make(chan struct{}),
-		closeCh: make(chan struct{}),
+// DialConn wraps an existing FrameConn (for example, one end of NewPipe) into a
+// ClientConn — the in-memory analog of Dial. It accepts the same options as
+// Dial; the WebSocket-handshake options (WithHeader, WithDialCompression,
+// WithReconnect) are ignored, since there is no handshake to apply them to.
+// WithClientInterceptor and WithDialInitialWindow do take effect.
+//
+// DialConn cannot fail today (the conn is already open); the error return
+// mirrors Dial for signature consistency and future transports.
+func DialConn(ctx context.Context, conn FrameConn, opts ...DialOption) (*ClientConn, error) {
+	cfg := defaultDialConfig()
+	for _, o := range opts {
+		o(&cfg)
 	}
+	mux := newMuxConfig(ctx, conn, nil, cfg.receiveBuffer, cfg.initialWindow, 0)
+	return &ClientConn{
+		mux:          mux,
+		waitCh:       make(chan struct{}),
+		closeCh:      make(chan struct{}),
+		interceptors: cfg.interceptors,
+	}, nil
+}
+
+// newClientConn wraps an existing FrameConn (used by tests over a pipe).
+func newClientConn(ctx context.Context, conn FrameConn) *ClientConn {
+	cc, _ := DialConn(ctx, conn)
+	return cc
 }
 
 // NewStream opens a new client stream for method with request headers. With

@@ -75,21 +75,21 @@ func TestReadLimitRejectsOversized(t *testing.T) {
 	require.Error(t, err)
 }
 
-// countingConn wraps a frameConn and counts Ping invocations.
+// countingConn wraps a FrameConn and counts Ping invocations.
 type countingConn struct {
-	frameConn
+	FrameConn
 	pings int64
 }
 
 func (c *countingConn) Ping(ctx context.Context) error {
 	atomic.AddInt64(&c.pings, 1)
-	return c.frameConn.Ping(ctx)
+	return c.FrameConn.Ping(ctx)
 }
 
 // TestKeepalivePings verifies startKeepalive actually pings the conn.
 func TestKeepalivePings(t *testing.T) {
 	a, _ := newPipe()
-	cc := &countingConn{frameConn: a}
+	cc := &countingConn{FrameConn: a}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 

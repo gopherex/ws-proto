@@ -7,7 +7,7 @@ import (
 	"github.com/gopherex/ws-proto/transport"
 )
 
-// pipeConn is an in-memory frameConn. newPipe returns the two connected ends.
+// pipeConn is an in-memory FrameConn. newPipe returns the two connected ends.
 type pipeConn struct {
 	in   chan *transport.Frame // frames readable on this end
 	out  chan *transport.Frame // frames written from this end
@@ -20,6 +20,22 @@ func newPipe() (*pipeConn, *pipeConn) {
 	done := make(chan struct{})
 	a := &pipeConn{in: ba, out: ab, done: done}
 	b := &pipeConn{in: ab, out: ba, done: done}
+	return a, b
+}
+
+// NewPipe returns two connected in-memory FrameConn ends: a frame written on
+// one is readable on the other, and either Close unblocks the peer.
+//
+// NewPipe is the ws-proto analog of google.golang.org/grpc/test/bufconn: pair
+// it with DialConn and (*Server).ServeConn to run a client and server in one
+// process with no socket and no WebSocket handshake:
+//
+//	srvEnd, cliEnd := wsrpc.NewPipe()
+//	go srv.ServeConn(ctx, srvEnd)
+//	cc, _ := wsrpc.DialConn(ctx, cliEnd)
+//	client := echov1.NewEchoServiceWSClient(cc)
+func NewPipe() (FrameConn, FrameConn) {
+	a, b := newPipe()
 	return a, b
 }
 

@@ -7,9 +7,12 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// frameConn is the abstract transport the Mux runs over. Implemented by
-// pipeConn (tests) and wsConn (coder/websocket).
-type frameConn interface {
+// FrameConn is the abstract transport a Mux runs over. The production
+// implementation wraps a coder/websocket connection; NewPipe returns an
+// in-memory pair for tests and single-process topologies. DialConn and
+// Server.ServeConn accept any FrameConn, so callers may also supply their own
+// implementation (over net.Pipe, an io.Pipe, a Unix socket, etc.).
+type FrameConn interface {
 	WriteFrame(ctx context.Context, f *transport.Frame) error
 	ReadFrame(ctx context.Context) (*transport.Frame, error)
 	Ping(ctx context.Context) error

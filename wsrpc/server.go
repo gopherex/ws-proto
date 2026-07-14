@@ -60,12 +60,38 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		base = s.cfg.connContext(base, r)
 	}
 	conn := newWSConn(c, s.cfg.readLimit)
-	mux := newMuxConfig(base, conn, func(stream *Stream) { go s.serveStream(stream) }, s.cfg.receiveBuffer, s.cfg.initialWindow, s.cfg.maxStreams)
+	mux := s.newServerMux(base, conn)
 	mux.startKeepalive(s.cfg.keepalive, s.cfg.keepaliveTimeout)
 	<-mux.ctx.Done()
 	if err := c.Close(websocket.StatusNormalClosure, ""); err != nil {
 		_ = c.CloseNow()
 	}
+}
+
+// newServerMux builds the per-connection server mux that dispatches streams to
+// registered handlers (with middleware and the max-streams cap applied). Shared
+// by ServeHTTP (WebSocket) and ServeConn (in-memory).
+func (s *Server) newServerMux(ctx context.Context, conn FrameConn) *Mux {
+	return newMuxConfig(ctx, conn, func(stream *Stream) { go s.serveStream(stream) },
+		s.cfg.receiveBuffer, s.cfg.initialWindow, s.cfg.maxStreams)
+}
+
+// ServeConn serves a single connection over an existing FrameConn — the
+// in-memory analog of serving a WebSocket upgrade. Streams are dispatched to
+// registered handlers exactly as in ServeHTTP, but origin policy and subprotocol
+// negotiation are skipped: those defend against browser/intermediary attacks
+// that have no meaning on a handed-off in-process channel. Keepalive pings are
+// skipped too — there is no proxy idle timeout to outlast.
+//
+// ServeConn blocks until ctx is canceled or conn is closed by the peer. Pair it
+// with NewPipe and DialConn to run a server and client in one process:
+//
+//	srvEnd, cliEnd := wsrpc.NewPipe()
+//	go srv.ServeConn(ctx, srvEnd)
+//	cc, _ := wsrpc.DialConn(ctx, cliEnd)
+func (s *Server) ServeConn(ctx context.Context, conn FrameConn) {
+	mux := s.newServerMux(ctx, conn)
+	<-mux.ctx.Done()
 }
 
 func (s *Server) serveStream(stream *Stream) {

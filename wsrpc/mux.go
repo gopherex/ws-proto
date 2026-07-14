@@ -15,10 +15,10 @@ import (
 // on the OPEN frame so the server can derive a per-stream context deadline.
 const timeoutHeader = "ws-timeout-ms"
 
-// Mux multiplexes streams over one frameConn. Used by both client and server;
+// Mux multiplexes streams over one FrameConn. Used by both client and server;
 // onOpen is nil on the client and set on the server to dispatch new streams.
 type Mux struct {
-	conn   frameConn
+	conn   FrameConn
 	ctx    context.Context
 	cancel context.CancelFunc
 
@@ -47,15 +47,15 @@ type Mux struct {
 	closedFlag atomic.Bool
 }
 
-func newMux(ctx context.Context, conn frameConn, onOpen func(*Stream)) *Mux {
+func newMux(ctx context.Context, conn FrameConn, onOpen func(*Stream)) *Mux {
 	return newMuxBuffered(ctx, conn, onOpen, defaultReceiveBuffer)
 }
 
-func newMuxBuffered(ctx context.Context, conn frameConn, onOpen func(*Stream), recvBuffer int) *Mux {
+func newMuxBuffered(ctx context.Context, conn FrameConn, onOpen func(*Stream), recvBuffer int) *Mux {
 	return newMuxConfig(ctx, conn, onOpen, recvBuffer, defaultInitialWindow, 0)
 }
 
-func newMuxConfig(ctx context.Context, conn frameConn, onOpen func(*Stream), recvBuffer, initialWindow, maxStreams int) *Mux {
+func newMuxConfig(ctx context.Context, conn FrameConn, onOpen func(*Stream), recvBuffer, initialWindow, maxStreams int) *Mux {
 	if recvBuffer <= 0 {
 		recvBuffer = defaultReceiveBuffer
 	}

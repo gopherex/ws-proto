@@ -20,7 +20,7 @@ func verifySubprotocol(c *websocket.Conn) error {
 	return nil
 }
 
-// wsConn adapts a coder/websocket connection to frameConn.
+// wsConn adapts a coder/websocket connection to FrameConn.
 type wsConn struct {
 	c *websocket.Conn
 }

@@ -218,6 +218,33 @@ client := echov1.NewEchoServiceWSClient(cc)
 res, err := client.Unary(ctx, &echov1.UnaryRequest{Name: "bob"})
 ```
 
+### In-memory transport (no socket)
+
+For tests, single-process topologies, or any case where a WebSocket round-trip is
+unwanted, `wsrpc.NewPipe` returns two connected in-memory `FrameConn` ends — the
+ws-proto analog of [`google.golang.org/grpc/test/bufconn`](https://pkg.go.dev/google.golang.org/grpc/test/bufconn).
+Feed one end to `Server.ServeConn` and the other to `wsrpc.DialConn`:
+
+```go
+srvEnd, cliEnd := wsrpc.NewPipe()
+go srv.ServeConn(ctx, srvEnd) // dispatches handlers exactly like ServeHTTP
+
+cc, err := wsrpc.DialConn(ctx, cliEnd, wsrpc.WithDialInitialWindow(64*1024))
+defer cc.Close()
+
+client := echov1.NewEchoServiceWSClient(cc) // generated client works unchanged
+res, err := client.Unary(ctx, &echov1.UnaryRequest{Name: "bob"})
+```
+
+`ServeConn` runs the same mux, middleware, interceptor bridge, and max-streams
+cap as `ServeHTTP`, but skips origin policy, subprotocol negotiation, and
+keepalive — those defend against browser/proxy concerns with no meaning on a
+handed-off in-process channel. `DialConn` accepts the same `DialOption`s as
+`Dial` (WebSocket-handshake options like `WithHeader`/`WithReconnect` are
+ignored; `WithClientInterceptor` and `WithDialInitialWindow` do take effect).
+The transport is abstracted by the exported `wsrpc.FrameConn` interface, so you
+may also plug your own (over `net.Pipe`, a Unix socket, etc.).
+
 ### TypeScript client (browser or node)
 
 ```ts
