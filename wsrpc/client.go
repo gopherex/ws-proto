@@ -76,7 +76,7 @@ func dialMux(ctx context.Context, url string, cfg dialConfig) (*Mux, error) {
 		return nil, err
 	}
 	conn := newWSConn(c, cfg.readLimit)
-	mux := newMuxConfig(ctx, conn, nil, cfg.receiveBuffer, cfg.initialWindow, 0)
+	mux := newMuxConfig(ctx, conn, nil, cfg.receiveBuffer, cfg.initialWindow, 0, nil)
 	mux.startKeepalive(cfg.keepalive, cfg.keepaliveTimeout)
 	return mux, nil
 }
@@ -94,7 +94,7 @@ func DialConn(ctx context.Context, conn FrameConn, opts ...DialOption) (*ClientC
 	for _, o := range opts {
 		o(&cfg)
 	}
-	mux := newMuxConfig(ctx, conn, nil, cfg.receiveBuffer, cfg.initialWindow, 0)
+	mux := newMuxConfig(ctx, conn, nil, cfg.receiveBuffer, cfg.initialWindow, 0, nil)
 	return &ClientConn{
 		mux:          mux,
 		waitCh:       make(chan struct{}),

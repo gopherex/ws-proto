@@ -364,6 +364,24 @@ func Auth(next wsrpc.Handler) wsrpc.Handler {
 srv := wsrpc.NewServer(wsrpc.WithMiddleware(Logging, Auth)) // Logging outermost
 ```
 
+### Transport stats (Go server)
+
+`wsrpc.WithStats` installs a `ServerStats` observer for transport-level events
+that per-RPC middleware cannot see: connection open/close, rejected upgrades
+(`origin_policy` / `upgrade`), stream start/end with the terminal status code,
+rejected streams (`max_streams` / `recv_overflow`), and per-message flow with
+payload sizes. Every field is optional (nil = skipped); callbacks must be fast
+and non-blocking — `MsgReceived` runs on the shared read loop.
+
+```go
+srv := wsrpc.NewServer(wsrpc.WithStats(&wsrpc.ServerStats{
+    ConnOpened:  func(ctx context.Context) { connections.Add(ctx, 1) },
+    ConnClosed:  func(ctx context.Context) { connections.Add(ctx, -1) },
+    MsgSent:     func(ctx context.Context, method string, n int) { egress.Add(ctx, int64(n)) },
+    MsgReceived: func(ctx context.Context, method string, n int) { ingress.Add(ctx, int64(n)) },
+}))
+```
+
 ### Client interceptors (Go & TS)
 
 Both clients support typed, **message-level** interceptors (the connect-web

@@ -188,7 +188,7 @@ func (r *reconnector) dialOnce() (*Mux, error) {
 		return nil, err
 	}
 	conn := newWSConn(c, r.cfg.readLimit)
-	mux := newMuxConfig(context.Background(), conn, nil, r.cfg.receiveBuffer, r.cfg.initialWindow, 0)
+	mux := newMuxConfig(context.Background(), conn, nil, r.cfg.receiveBuffer, r.cfg.initialWindow, 0, nil)
 	mux.startKeepalive(r.cfg.keepalive, r.cfg.keepaliveTimeout)
 	return mux, nil
 }

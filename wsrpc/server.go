@@ -43,6 +43,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// With neither, every upgrade is rejected rather than silently accepting
 	// cross-origin clients (CSRF / cross-site WebSocket hijacking defense).
 	if len(s.cfg.originPatterns) == 0 && !s.cfg.insecureSkipOrigin {
+		s.cfg.stats.connRejected(statsReasonOriginPolicy)
 		http.Error(w, "wsrpc: origin policy not configured (use WithOriginPatterns or WithInsecureSkipOriginCheck)", http.StatusForbidden)
 		return
 	}
@@ -53,12 +54,17 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		CompressionMode:    s.cfg.compression,
 	})
 	if err != nil {
+		// Includes browser Origin mismatches: websocket.Accept enforces
+		// OriginPatterns itself, so a cross-origin page lands here.
+		s.cfg.stats.connRejected(statsReasonUpgrade)
 		return
 	}
 	base := r.Context()
 	if s.cfg.connContext != nil {
 		base = s.cfg.connContext(base, r)
 	}
+	s.cfg.stats.connOpened(base)
+	defer s.cfg.stats.connClosed(base)
 	conn := newWSConn(c, s.cfg.readLimit)
 	mux := s.newServerMux(base, conn)
 	mux.startKeepalive(s.cfg.keepalive, s.cfg.keepaliveTimeout)
@@ -73,7 +79,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // by ServeHTTP (WebSocket) and ServeConn (in-memory).
 func (s *Server) newServerMux(ctx context.Context, conn FrameConn) *Mux {
 	return newMuxConfig(ctx, conn, func(stream *Stream) { go s.serveStream(stream) },
-		s.cfg.receiveBuffer, s.cfg.initialWindow, s.cfg.maxStreams)
+		s.cfg.receiveBuffer, s.cfg.initialWindow, s.cfg.maxStreams, s.cfg.stats)
 }
 
 // ServeConn serves a single connection over an existing FrameConn — the
@@ -90,6 +96,8 @@ func (s *Server) newServerMux(ctx context.Context, conn FrameConn) *Mux {
 //	go srv.ServeConn(ctx, srvEnd)
 //	cc, _ := wsrpc.DialConn(ctx, cliEnd)
 func (s *Server) ServeConn(ctx context.Context, conn FrameConn) {
+	s.cfg.stats.connOpened(ctx)
+	defer s.cfg.stats.connClosed(ctx)
 	mux := s.newServerMux(ctx, conn)
 	<-mux.ctx.Done()
 }
@@ -114,10 +122,12 @@ func (s *Server) serveStream(stream *Stream) {
 		return
 	}
 	h = chain(h, s.cfg.middleware)
+	s.cfg.stats.streamStarted(stream.ctx, stream.method)
 	err := h(stream.ctx, stream)
 	st := FromError(err)
 	if st == nil {
 		st = &Status{Code: codes.OK}
 	}
+	s.cfg.stats.streamEnded(stream.ctx, stream.method, st.Code)
 	_ = stream.end(st, stream.takeTrailer())
 }

@@ -20,7 +20,7 @@ func TestMaxConcurrentStreamsRejectsOverLimit(t *testing.T) {
 	const maxStreams = 2
 	gotStream := make(chan *Stream, 8)
 	srvEnd, peer := newPipe()
-	_ = newMuxConfig(ctx, srvEnd, func(s *Stream) { gotStream <- s }, defaultReceiveBuffer, defaultInitialWindow, maxStreams)
+	_ = newMuxConfig(ctx, srvEnd, func(s *Stream) { gotStream <- s }, defaultReceiveBuffer, defaultInitialWindow, maxStreams, nil)
 
 	// First two OPENs are dispatched (handlers never end them, so they stay live).
 	for _, id := range []uint32{1, 3} {

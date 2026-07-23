@@ -80,7 +80,7 @@ func TestOverflowResetsSlowStream(t *testing.T) {
 	const window = 32
 	gotStream := make(chan *Stream, 1)
 	srvEnd, peer := newPipe()
-	_ = newMuxConfig(ctx, srvEnd, func(s *Stream) { gotStream <- s }, defaultReceiveBuffer, window, 0)
+	_ = newMuxConfig(ctx, srvEnd, func(s *Stream) { gotStream <- s }, defaultReceiveBuffer, window, 0, nil)
 
 	a := openServerStream(t, ctx, peer, gotStream, 1, "/t/A")
 

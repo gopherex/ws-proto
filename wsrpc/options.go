@@ -55,6 +55,7 @@ type serverConfig struct {
 	compression        CompressionMode
 	connContext        func(ctx context.Context, r *http.Request) context.Context
 	middleware         []Middleware
+	stats              *ServerStats
 }
 
 // ServerOption configures a Server.
@@ -140,6 +141,13 @@ func WithCompression(m CompressionMode) ServerOption {
 // middleware passed runs outermost. Multiple calls accumulate in order.
 func WithMiddleware(mw ...Middleware) ServerOption {
 	return func(c *serverConfig) { c.middleware = append(c.middleware, mw...) }
+}
+
+// WithStats installs a ServerStats observer for transport-level events
+// (connection lifecycle, rejections, per-message flow) that per-RPC middleware
+// cannot see. Callbacks must be fast and non-blocking — see ServerStats.
+func WithStats(stats *ServerStats) ServerOption {
+	return func(c *serverConfig) { c.stats = stats }
 }
 
 func defaultServerConfig() serverConfig {

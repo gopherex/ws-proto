@@ -35,10 +35,10 @@ func windowedHarness(t *testing.T, window int, handlers map[string]Handler) *Cli
 			}
 			_ = s.end(st, nil)
 		}()
-	}, defaultReceiveBuffer, window, 0)
+	}, defaultReceiveBuffer, window, 0, nil)
 
 	cc := &ClientConn{
-		mux:     newMuxConfig(ctx, cliEnd, nil, defaultReceiveBuffer, window, 0),
+		mux:     newMuxConfig(ctx, cliEnd, nil, defaultReceiveBuffer, window, 0, nil),
 		waitCh:  make(chan struct{}),
 		closeCh: make(chan struct{}),
 	}

@@ -193,11 +193,15 @@ func (s *Stream) Send(msg proto.Message) error {
 	s.msgSent = true
 	s.mu.Unlock()
 
-	return s.mux.write(s.ctx, &transport.Frame{
+	if err := s.mux.write(s.ctx, &transport.Frame{
 		StreamId: s.id,
 		Kind:     transport.Kind_KIND_MSG,
 		Payload:  b,
-	})
+	}); err != nil {
+		return err
+	}
+	s.mux.stats.msgSent(s.ctx, s.method, n)
+	return nil
 }
 
 // sendBlockErrLocked reports the error a blocked Send should return instead of

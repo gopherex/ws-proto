@@ -41,6 +41,10 @@ type Mux struct {
 	// read loop would block behind it, stalling reads and deadlocking the conn.
 	ctrlCh chan *transport.Frame
 
+	// stats observes server transport events; nil on clients and when the
+	// operator installed none (every dispatch helper is nil-safe).
+	stats *ServerStats
+
 	// closed records a deliberate user Close so the conn-loss path can
 	// distinguish an intentional shutdown (codes.Canceled, "transport closed")
 	// from a transport disconnect (codes.Unavailable, "wsrpc: connection lost").
@@ -52,10 +56,10 @@ func newMux(ctx context.Context, conn FrameConn, onOpen func(*Stream)) *Mux {
 }
 
 func newMuxBuffered(ctx context.Context, conn FrameConn, onOpen func(*Stream), recvBuffer int) *Mux {
-	return newMuxConfig(ctx, conn, onOpen, recvBuffer, defaultInitialWindow, 0)
+	return newMuxConfig(ctx, conn, onOpen, recvBuffer, defaultInitialWindow, 0, nil)
 }
 
-func newMuxConfig(ctx context.Context, conn FrameConn, onOpen func(*Stream), recvBuffer, initialWindow, maxStreams int) *Mux {
+func newMuxConfig(ctx context.Context, conn FrameConn, onOpen func(*Stream), recvBuffer, initialWindow, maxStreams int, stats *ServerStats) *Mux {
 	if recvBuffer <= 0 {
 		recvBuffer = defaultReceiveBuffer
 	}
@@ -72,6 +76,7 @@ func newMuxConfig(ctx context.Context, conn FrameConn, onOpen func(*Stream), rec
 		onOpen:        onOpen,
 		initialWindow: initialWindow,
 		maxStreams:    maxStreams,
+		stats:         stats,
 		ctrlCh:        make(chan *transport.Frame, ctrlBufferSize),
 	}
 	go m.ctrlWriter()
@@ -217,6 +222,7 @@ func (m *Mux) route(f *transport.Frame) {
 			over := len(m.streams) >= m.maxStreams
 			m.mu.Unlock()
 			if over {
+				m.stats.streamRejected(statsReasonMaxStreams)
 				m.writeCtrl(&transport.Frame{
 					StreamId: f.StreamId,
 					Kind:     transport.Kind_KIND_RST,
@@ -279,10 +285,13 @@ func (m *Mux) route(f *transport.Frame) {
 		m.remove(f.StreamId)
 		return
 	default: // KIND_MSG
-		if !s.tryDeliver(f) {
+		if s.tryDeliver(f) {
+			m.stats.msgReceived(s.ctx, s.method, len(f.Payload))
+		} else {
 			// Consumer too slow: the bounded receive buffer overflowed. Reset
 			// the stream locally and tell the peer to stop. The read loop must
 			// never block, so we drop this stream and move on to the others.
+			m.stats.streamRejected(statsReasonRecvOverflow)
 			s.failWith(Errorf(codes.ResourceExhausted, "wsrpc: receive buffer overflow"))
 			m.writeCtrl(&transport.Frame{
 				StreamId: f.StreamId,
