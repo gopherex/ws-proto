@@ -222,7 +222,7 @@ func (m *Mux) route(f *transport.Frame) {
 			over := len(m.streams) >= m.maxStreams
 			m.mu.Unlock()
 			if over {
-				m.stats.streamRejected(statsReasonMaxStreams)
+				m.stats.streamRejected(m.ctx, statsReasonMaxStreams)
 				m.writeCtrl(&transport.Frame{
 					StreamId: f.StreamId,
 					Kind:     transport.Kind_KIND_RST,
@@ -291,7 +291,7 @@ func (m *Mux) route(f *transport.Frame) {
 			// Consumer too slow: the bounded receive buffer overflowed. Reset
 			// the stream locally and tell the peer to stop. The read loop must
 			// never block, so we drop this stream and move on to the others.
-			m.stats.streamRejected(statsReasonRecvOverflow)
+			m.stats.streamRejected(m.ctx, statsReasonRecvOverflow)
 			s.failWith(Errorf(codes.ResourceExhausted, "wsrpc: receive buffer overflow"))
 			m.writeCtrl(&transport.Frame{
 				StreamId: f.StreamId,

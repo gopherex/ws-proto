@@ -43,7 +43,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// With neither, every upgrade is rejected rather than silently accepting
 	// cross-origin clients (CSRF / cross-site WebSocket hijacking defense).
 	if len(s.cfg.originPatterns) == 0 && !s.cfg.insecureSkipOrigin {
-		s.cfg.stats.connRejected(statsReasonOriginPolicy)
+		s.cfg.stats.connRejected(r.Context(), statsReasonOriginPolicy)
 		http.Error(w, "wsrpc: origin policy not configured (use WithOriginPatterns or WithInsecureSkipOriginCheck)", http.StatusForbidden)
 		return
 	}
@@ -56,7 +56,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		// Includes browser Origin mismatches: websocket.Accept enforces
 		// OriginPatterns itself, so a cross-origin page lands here.
-		s.cfg.stats.connRejected(statsReasonUpgrade)
+		s.cfg.stats.connRejected(r.Context(), statsReasonUpgrade)
 		return
 	}
 	base := r.Context()

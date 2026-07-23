@@ -34,7 +34,7 @@ func (r *statsRecorder) stats() *wsrpc.ServerStats {
 	return &wsrpc.ServerStats{
 		ConnOpened: func(context.Context) { r.mu.Lock(); r.connOpened++; r.mu.Unlock() },
 		ConnClosed: func(context.Context) { r.mu.Lock(); r.connClosed++; r.mu.Unlock() },
-		ConnRejected: func(reason string) {
+		ConnRejected: func(_ context.Context, reason string) {
 			r.mu.Lock()
 			r.connRejected = append(r.connRejected, reason)
 			r.mu.Unlock()
@@ -49,7 +49,7 @@ func (r *statsRecorder) stats() *wsrpc.ServerStats {
 			r.streamsEnded[method] = code
 			r.mu.Unlock()
 		},
-		StreamRejected: func(reason string) {
+		StreamRejected: func(_ context.Context, reason string) {
 			r.mu.Lock()
 			r.streamsRejected = append(r.streamsRejected, reason)
 			r.mu.Unlock()

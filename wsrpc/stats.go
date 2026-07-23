@@ -22,20 +22,20 @@ type ServerStats struct {
 	// ConnClosed fires when the connection's mux terminates, with the same
 	// base context as ConnOpened.
 	ConnClosed func(ctx context.Context)
-	// ConnRejected fires when an upgrade never becomes a connection.
-	// Reasons: "origin_policy" (fail-closed origin gate, see NewServer),
-	// "upgrade" (websocket handshake failed).
-	ConnRejected func(reason string)
+	// ConnRejected fires when an upgrade never becomes a connection, with the
+	// HTTP request context. Reasons: "origin_policy" (fail-closed origin gate,
+	// see NewServer), "upgrade" (websocket handshake failed).
+	ConnRejected func(ctx context.Context, reason string)
 	// StreamStarted fires when a dispatched stream reaches its handler chain.
 	StreamStarted func(ctx context.Context, method string)
 	// StreamEnded fires when the handler chain returns, with the terminal
 	// status code sent to the peer.
 	StreamEnded func(ctx context.Context, method string, code codes.Code)
-	// StreamRejected fires when a stream dies without (or outside) its handler.
-	// Reasons: "max_streams" (WithMaxConcurrentStreams cap; the stream never
-	// existed), "recv_overflow" (slow consumer overflowed the bounded inbound
-	// backlog; the stream is reset).
-	StreamRejected func(reason string)
+	// StreamRejected fires when a stream dies without (or outside) its handler,
+	// with the connection context. Reasons: "max_streams"
+	// (WithMaxConcurrentStreams cap; the stream never existed), "recv_overflow"
+	// (slow consumer overflowed the bounded inbound backlog; the stream is reset).
+	StreamRejected func(ctx context.Context, reason string)
 	// MsgSent fires after a response MSG frame is written, with its payload size.
 	MsgSent func(ctx context.Context, method string, bytes int)
 	// MsgReceived fires when an inbound MSG frame is accepted into a stream's
@@ -65,9 +65,9 @@ func (st *ServerStats) connClosed(ctx context.Context) {
 	}
 }
 
-func (st *ServerStats) connRejected(reason string) {
+func (st *ServerStats) connRejected(ctx context.Context, reason string) {
 	if st != nil && st.ConnRejected != nil {
-		st.ConnRejected(reason)
+		st.ConnRejected(ctx, reason)
 	}
 }
 
@@ -83,9 +83,9 @@ func (st *ServerStats) streamEnded(ctx context.Context, method string, code code
 	}
 }
 
-func (st *ServerStats) streamRejected(reason string) {
+func (st *ServerStats) streamRejected(ctx context.Context, reason string) {
 	if st != nil && st.StreamRejected != nil {
-		st.StreamRejected(reason)
+		st.StreamRejected(ctx, reason)
 	}
 }
 
