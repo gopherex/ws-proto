@@ -216,6 +216,7 @@ describe("B: cancellation and deadlines are terminal exactly once", () => {
     const ctl = new AbortController();
     const res = await t.stream(bidiMethod, foreverSource(msg(1)), { signal: ctl.signal });
     const pending = res.message[Symbol.asyncIterator]().next();
+    swallow(pending); // observe immediately: rejection may land before expectRejects attaches
     await tick();
 
     sock.drop();
@@ -231,6 +232,7 @@ describe("B: cancellation and deadlines are terminal exactly once", () => {
     const t = WsTransport.fromSocket(sock);
     const res = await t.stream(bidiMethod, foreverSource(msg(1)), { timeoutMs: 20 });
     const pending = res.message[Symbol.asyncIterator]().next();
+    swallow(pending); // observe immediately: rejection may land before expectRejects attaches
     await tick();
 
     const err = await expectRejects(pending, 500, "deadline call");
@@ -243,6 +245,7 @@ describe("B: cancellation and deadlines are terminal exactly once", () => {
     const t = WsTransport.fromSocket(sock);
     const res = await t.stream(bidiMethod, foreverSource(msg(1)), { timeoutMs: 30 });
     const pending = res.message[Symbol.asyncIterator]().next();
+    swallow(pending); // observe immediately: rejection may land before expectRejects attaches
     await tick();
 
     sock.drop();
@@ -565,6 +568,7 @@ describe("G: concurrent streams", () => {
     const t = WsTransport.fromSocket(sock);
     const res = await t.stream(bidiMethod, foreverSource(msg(1)), {});
     const pending = res.message[Symbol.asyncIterator]().next();
+    swallow(pending); // observe immediately: rejection may land before expectRejects attaches
     await tick();
 
     await expectNeverSettles(pending, 60, "idle healthy call");

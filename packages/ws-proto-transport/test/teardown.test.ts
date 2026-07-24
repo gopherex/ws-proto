@@ -14,6 +14,7 @@ import {
   foreverSource,
   expectSettles,
   expectRejects,
+  swallow,
   tick,
 } from "./harness.js";
 
@@ -26,6 +27,7 @@ describe("teardown: terminal read event with an infinite request source", () => 
     const res = await t.stream(bidiMethod, foreverSource(msg(1), events), {});
     const iter = res.message[Symbol.asyncIterator]();
     const pending = iter.next();
+    swallow(pending); // observe immediately: rejection may land before expectRejects attaches
     await tick(); // let OPEN/MSG flush
 
     sock.error(); // hard transport drop, no close frame
@@ -42,6 +44,7 @@ describe("teardown: terminal read event with an infinite request source", () => 
 
     const res = await t.stream(bidiMethod, foreverSource(msg(1), events), {});
     const pending = res.message[Symbol.asyncIterator]().next();
+    swallow(pending); // observe immediately: rejection may land before expectRejects attaches
     await tick();
 
     sock.error();
@@ -69,6 +72,7 @@ describe("teardown: terminal read event with an infinite request source", () => 
 
     const res = await t.stream(bidiMethod, source, {});
     const pending = res.message[Symbol.asyncIterator]().next();
+    swallow(pending); // observe immediately: rejection may land before expectRejects attaches
     await tick();
 
     sock.error(); // read side dies first: UNAVAILABLE is the root cause
@@ -87,6 +91,7 @@ describe("teardown: terminal read event with an infinite request source", () => 
 
     const res = await t.stream(bidiMethod, foreverSource(msg(1), events), {});
     const pending = res.message[Symbol.asyncIterator]().next();
+    swallow(pending); // observe immediately: rejection may land before expectRejects attaches
     await tick();
 
     sock.inject({
@@ -162,6 +167,7 @@ describe("teardown: terminal read event with an infinite request source", () => 
 
     const res = await t.stream(bidiMethod, source, {});
     const pending = res.message[Symbol.asyncIterator]().next();
+    swallow(pending); // observe immediately: rejection may land before expectRejects attaches
     await tick();
 
     const err = await expectRejects(pending, 500, "response iterator");
