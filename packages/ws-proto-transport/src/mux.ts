@@ -1,5 +1,6 @@
 import { encodeFrame, decodeFrame, Kind } from "./frame.js";
 import { StreamImpl, DEFAULT_INITIAL_WINDOW, DEFAULT_MAX_SEND_BUFFER } from "./stream.js";
+import type { StreamHooks } from "./stream.js";
 import {
   WsStatusError,
   statusErrorFromProto,
@@ -65,6 +66,17 @@ export interface WebSocketLike {
 const WS_OPEN = 1;
 
 /**
+ * NOOP_HOOKS backs a stream that is failed at birth (openStream on a defunct
+ * mux): it never writes frames, so its cancel/abort paths touch no socket.
+ */
+const NOOP_HOOKS: StreamHooks = {
+  sendMsg: () => {},
+  halfClose: () => {},
+  reset: () => {},
+  windowUpdate: () => {},
+};
+
+/**
  * SUBPROTOCOL is the WebSocket subprotocol the client offers and the server must
  * echo. Defined here (rather than in transport.ts) so the Mux can validate the
  * negotiated value without importing transport.ts (which would be a cycle).
@@ -93,6 +105,15 @@ export class Mux {
   private sendBufferBytes = 0;
   private open = false;
   private closed = false;
+  /**
+   * dead marks a mux whose socket dropped (not via close()). Together with
+   * `closed` it forms the "gone for good" state: no frame may be buffered or
+   * written, and new streams fail fast with `terminalError`. This is distinct
+   * from "not yet open" (`!open`), where frames legitimately buffer.
+   */
+  private dead = false;
+  /** The error that killed this mux; reused to fail late openStream() calls. */
+  private terminalError?: WsStatusError;
   /** Fired once when the socket drops (not via close()); used to drive reconnect. */
   private onDisconnect?: () => void;
 
@@ -150,7 +171,7 @@ export class Mux {
     const p = this.ws.protocol;
     if (p !== undefined && p !== SUBPROTOCOL) {
       this.closed = true; // terminal: suppress reconnect and further sends
-      this.failAll(
+      this.markDefunct(
         new WsStatusError(
           CODE_UNAVAILABLE,
           `server did not negotiate subprotocol "${SUBPROTOCOL}" (got "${p}")`,
@@ -166,11 +187,25 @@ export class Mux {
     return true;
   }
 
+  /**
+   * markDefunct transitions the mux to its terminal state: remembers the cause
+   * for late openStream() calls, releases the pre-open frame buffer (those
+   * frames can never be delivered), and fails every registered stream. Safe to
+   * call more than once; the first cause wins.
+   */
+  private markDefunct(err: WsStatusError): void {
+    this.terminalError ??= err;
+    this.sendBuffer.length = 0;
+    this.sendBufferBytes = 0;
+    this.failAll(err);
+  }
+
   private onTransportDrop(): void {
-    if (this.closed) {
-      return; // deliberate close already failed streams with CANCELLED
+    if (this.closed || this.dead) {
+      return; // deliberate close / earlier drop already failed the streams
     }
-    this.failAll(new WsStatusError(CODE_UNAVAILABLE, "connection lost"));
+    this.dead = true;
+    this.markDefunct(new WsStatusError(CODE_UNAVAILABLE, "connection lost"));
     const fn = this.onDisconnect;
     this.onDisconnect = undefined; // fire at most once
     fn?.();
@@ -180,6 +215,17 @@ export class Mux {
   openStream(method: string, init?: StreamInit): StreamImpl {
     const id = this.nextId;
     this.nextId += 2;
+
+    if (this.closed || this.dead) {
+      // A defunct mux can never carry a new RPC. Decide the call's fate NOW:
+      // fail it fast with the terminal cause (the caller's retry loop redials)
+      // instead of buffering frames toward a socket that is gone forever.
+      const stream = new StreamImpl(id, NOOP_HOOKS, this.initialWindow, this.maxSendBuffer);
+      stream.endError(
+        this.terminalError ?? new WsStatusError(CODE_UNAVAILABLE, "connection lost"),
+      );
+      return stream;
+    }
 
     const stream = new StreamImpl(
       id,
@@ -233,10 +279,15 @@ export class Mux {
     return stream;
   }
 
-  /** writeFrame sends now if the socket is open, otherwise buffers until onopen. */
+  /**
+   * writeFrame sends now if the socket is open, otherwise buffers until onopen.
+   * Writing into a defunct mux (dropped or closed) throws: every public path
+   * fails fast before reaching here, so a write that does arrive is a transport
+   * bug that must surface loudly, never masquerade as a successful send.
+   */
   private writeFrame(bytes: Uint8Array): void {
-    if (this.closed) {
-      return;
+    if (this.closed || this.dead) {
+      throw this.terminalError ?? new WsStatusError(CODE_UNAVAILABLE, "connection lost");
     }
     if (this.open) {
       this.ws.send(bytes);
@@ -246,7 +297,7 @@ export class Mux {
     // socket never opens fails the connection instead of growing without limit.
     if (this.sendBufferBytes + bytes.length > MAX_PREOPEN_BUFFER_BYTES) {
       this.closed = true;
-      this.failAll(new WsStatusError(CODE_UNAVAILABLE, "send buffer overflow before connect"));
+      this.markDefunct(new WsStatusError(CODE_UNAVAILABLE, "send buffer overflow before connect"));
       try {
         this.ws.close(1011, "send buffer overflow");
       } catch {
@@ -287,7 +338,12 @@ export class Mux {
       }
       return;
     }
-    const frame = decodeFrame(bytes);
+    let frame: ReturnType<typeof decodeFrame>;
+    try {
+      frame = decodeFrame(bytes);
+    } catch {
+      return; // undecodable frame: ignore, like an unknown Kind — never crash the mux
+    }
 
     switch (frame.kind) {
       case Kind.KIND_OPEN:
@@ -385,7 +441,7 @@ export class Mux {
       return;
     }
     this.closed = true;
-    this.failAll(new WsStatusError(CODE_CANCELLED, "transport closed"));
+    this.markDefunct(new WsStatusError(CODE_CANCELLED, "transport closed"));
     try {
       this.ws.close(1000, "");
     } catch {

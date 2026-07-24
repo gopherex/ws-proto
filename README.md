@@ -320,14 +320,44 @@ const transport = new WsTransport("wss://api.example.com/rpc", {
 **There is no stream resume.** When the connection drops, in-flight RPCs fail
 with **`codes.Unavailable`** (Go) / **`CODE_UNAVAILABLE` (14)** (TS) — message
 `"connection lost"` — and **the caller must retry** them; the server keeps no
-per-stream session state. New RPCs started after a drop wait for (or trigger) a
-reconnect and run on the fresh socket; RPCs opened during the gap buffer their
-frames and flush once the new socket opens. A deliberate `Close()` instead fails
-in-flight streams with `codes.Canceled` ("transport closed"), so an intentional
-shutdown stays distinguishable from a transport disconnect.
+per-stream session state. RPCs opened in the backoff window **before** the
+replacement socket exists fail immediately with `CODE_UNAVAILABLE` (the caller's
+retry loop redials); once the replacement socket is being dialed, new RPCs
+buffer their frames and flush when it opens. A deliberate `Close()` instead
+fails in-flight streams with `codes.Canceled` ("transport closed"), so an
+intentional shutdown stays distinguishable from a transport disconnect.
 
 Without `WithReconnect` / `{ reconnect: true }` the behavior is unchanged: a
 dropped connection fails everything with `Unavailable` and stays down.
+
+### Stream teardown contract (TS transport)
+
+The TypeScript transport guarantees the following on **every** terminal stream
+event (clean END, error END, RST, abort, deadline, connection loss, deliberate
+close). These are public contract, pinned by the invariant test suite:
+
+1. **A terminal read-side event finishes the whole call.** Response iteration
+   settles (completes or rejects) and `trailer` is populated. The write side is
+   force-finished; nothing keeps the call half-alive.
+2. **The transport never waits on the caller's request source.** A request
+   source may be infinite and idle (a long-lived bidi sync channel is the
+   normal pattern). On a terminal event the transport *finalizes* the source —
+   it calls the iterator's `return()` so the caller's generator unwinds its
+   `finally` blocks — rather than waiting for it to yield. Per the async
+   generator protocol, a queued `return()` runs as soon as the source's pending
+   `await` settles; JavaScript cannot interrupt the `await` itself.
+3. **The read-side error is the root cause and wins.** If both the read side
+   and the request source fail, the read-side error (e.g. `CODE_UNAVAILABLE`
+   "connection lost") is surfaced; a source error surfaces only when the read
+   side ended cleanly.
+4. **A dead transport is observable.** "Socket not yet open" (frames buffer,
+   then flush) and "socket gone for good" (dropped/closed) are distinct states.
+   On a defunct connection, new streams fail immediately with the terminal
+   error, and the old connection releases every buffered frame and stream
+   registration — a send into the void can never look successful.
+5. **No teardown path blocks unboundedly.** Trailers resolve on every terminal
+   path, so awaiting `responseHeaders()` / draining the response iterator after
+   an error always settles promptly.
 
 ---
 

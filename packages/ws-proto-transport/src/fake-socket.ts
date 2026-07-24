@@ -74,9 +74,24 @@ export class FakeSocket implements WebSocketLike {
     this.onmessage?.({ data: bytes });
   }
 
+  /** injectRaw delivers arbitrary bytes to the client mux (malformed-input tests). */
+  injectRaw(data: unknown): void {
+    this.onmessage?.({ data });
+  }
+
   /** error simulates a socket error (mux fails all streams). */
   error(): void {
     this.onerror?.({});
+  }
+
+  /**
+   * drop simulates a hard transport loss the way a browser reports it: an
+   * `error` event followed by a `close` event with an abnormal code and no
+   * server close frame. Both events reach the mux (double-notification path).
+   */
+  drop(): void {
+    this.onerror?.({});
+    this.close(1006, "abnormal closure");
   }
 
   /** lastSent returns the most recently sent Frame, or undefined. */

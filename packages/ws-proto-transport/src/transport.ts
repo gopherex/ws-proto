@@ -305,13 +305,22 @@ export class WsTransport {
       signal: req.signal,
       timeoutMs: req.timeoutMs,
     });
-    // Pump request messages concurrently; on source failure cancel so the read
-    // side ends promptly, and re-raise the captured error after iteration.
+    // Pump request messages concurrently through an explicit iterator so the
+    // terminal path can finalize the caller's source with return() instead of
+    // waiting for it: the source is not under transport control and may be
+    // infinite/idle (e.g. a long-lived bidi sync channel), so the pump must
+    // never gate stream teardown. On source failure, cancel so the read side
+    // ends promptly; the captured error is re-raised after iteration.
+    const source = req.message[Symbol.asyncIterator]();
     let pumpError: unknown;
-    const pump = (async () => {
+    void (async () => {
       try {
-        for await (const msg of req.message) {
-          stream.send(toBinary(m.input, msg));
+        for (;;) {
+          const r = await source.next();
+          if (r.done) {
+            break;
+          }
+          stream.send(toBinary(m.input, r.value));
         }
         stream.closeSend();
       } catch (err) {
@@ -327,14 +336,29 @@ export class WsTransport {
     const trailer: Record<string, string> = {};
 
     async function* responseGen(): AsyncIterable<Message> {
+      let readFailed = false;
       try {
         for await (const frameBytes of stream) {
           yield fromBinary(m.output, frameBytes);
         }
+      } catch (err) {
+        readFailed = true;
+        throw err;
       } finally {
-        await pump;
+        // Best-effort source finalization, never awaited: with a next() still
+        // pending, return() is queued by the generator protocol and can only
+        // run once that await settles — which may be never for an idle source.
+        try {
+          void Promise.resolve(source.return?.()).catch(() => {});
+        } catch {
+          // a hostile iterator throwing from return() must not mask teardown
+        }
+        // Bounded: responseHeaders() settles on every terminal path
+        // (endOk / endError / cancel / abort).
         Object.assign(trailer, await stream.responseHeaders());
-        if (pumpError !== undefined) {
+        // The read-side error is the root cause and takes priority; a source
+        // error surfaces only when the read side ended cleanly.
+        if (!readFailed && pumpError !== undefined) {
           throw pumpError;
         }
       }
