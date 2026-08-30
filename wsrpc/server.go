@@ -118,6 +118,9 @@ func (s *Server) serveStream(stream *Stream) {
 	h := s.handlers[stream.method]
 	s.mu.RUnlock()
 	if h == nil {
+		h = s.cfg.unknownHandler
+	}
+	if h == nil {
 		_ = stream.end(&Status{Code: codes.Unimplemented, Message: "unknown method " + stream.method}, nil)
 		return
 	}

@@ -177,6 +177,14 @@ func (s *Stream) Send(msg proto.Message) error {
 	if err != nil {
 		return err
 	}
+	return s.SendRaw(b)
+}
+
+// SendRaw writes an already-marshaled message payload as a MSG frame, subject to
+// the same flow-control blocking as Send. It exists for proxies that relay
+// frames without knowing the message types; the bytes MUST be a valid marshaled
+// protobuf message for the peer's decoder.
+func (s *Stream) SendRaw(b []byte) error {
 	n := len(b)
 
 	s.mu.Lock()
@@ -246,13 +254,13 @@ func (s *Stream) wakeSenders() {
 	}
 }
 
-// deliverMsg unmarshals a consumed MSG and, as part of consuming it, returns
+// deliverPayload consumes a MSG frame and, as part of consuming it, returns
 // flow-control credit to the peer (KIND_WINDOW_UPDATE). Credit is returned on
 // CONSUMPTION (here), not on arrival, which is what makes the window real
 // backpressure: a sender only regains credit once the receiver has drained.
-func (s *Stream) deliverMsg(f *transport.Frame, msg proto.Message) error {
+func (s *Stream) deliverPayload(f *transport.Frame) []byte {
 	s.returnCredit(len(f.Payload))
-	return proto.Unmarshal(f.Payload, msg)
+	return f.Payload
 }
 
 // returnCredit accumulates consumed bytes and, once the pending total crosses
@@ -304,34 +312,46 @@ func (s *Stream) popRecv() *transport.Frame {
 // Recv waits for the next MSG and unmarshals into msg. Returns io.EOF on a
 // clean END, or the *Status as error on a non-OK END / RST.
 func (s *Stream) Recv(msg proto.Message) error {
+	b, err := s.RecvRaw()
+	if err != nil {
+		return err
+	}
+	return proto.Unmarshal(b, msg)
+}
+
+// RecvRaw waits for the next MSG and returns its payload without unmarshaling.
+// Terminal semantics are identical to Recv: io.EOF on a clean END, the *Status
+// as error on a non-OK END / RST. It exists for proxies that relay frames
+// without knowing the message types.
+func (s *Stream) RecvRaw() ([]byte, error) {
 	for {
 		// Prefer any already-buffered MSG so terminal/half-close signals never
 		// preempt pending data (drain-first).
 		if f := s.popRecv(); f != nil {
-			return s.deliverMsg(f, msg)
+			return s.deliverPayload(f), nil
 		}
 		select {
 		case <-s.recvSignal:
 			// A frame was enqueued (or a spurious wake): loop and try to pop it.
 		case <-s.halfClosed:
 			if f := s.popRecv(); f != nil {
-				return s.deliverMsg(f, msg)
+				return s.deliverPayload(f), nil
 			}
-			return io.EOF
+			return nil, io.EOF
 		case <-s.ended:
-			return s.recvEnded(msg)
+			return s.recvEnded()
 		case <-s.ctx.Done():
 			// A terminal frame may have closed ctx via failWith/applyEnd; surface a
 			// recorded END/RST in preference to the bare context error.
 			select {
 			case <-s.ended:
-				return s.recvEnded(msg)
+				return s.recvEnded()
 			default:
 			}
 			if f := s.popRecv(); f != nil {
-				return s.deliverMsg(f, msg)
+				return s.deliverPayload(f), nil
 			}
-			return s.ctx.Err()
+			return nil, s.ctx.Err()
 		}
 	}
 }
@@ -339,9 +359,9 @@ func (s *Stream) Recv(msg proto.Message) error {
 // recvEnded is entered once a terminal END/RST has been recorded. Any MSGs
 // still buffered are delivered first; only when the queue is empty is the
 // terminal status returned.
-func (s *Stream) recvEnded(msg proto.Message) error {
+func (s *Stream) recvEnded() ([]byte, error) {
 	if f := s.popRecv(); f != nil {
-		return s.deliverMsg(f, msg)
+		return s.deliverPayload(f), nil
 	}
 	s.mu.Lock()
 	f := s.endFrame
@@ -349,25 +369,25 @@ func (s *Stream) recvEnded(msg proto.Message) error {
 	if f == nil {
 		// Terminal via failWith (no frame), e.g. connection drop / overflow.
 		if st := s.status(); st != nil && st.Code != codes.OK {
-			return st
+			return nil, st
 		}
-		return io.EOF
+		return nil, io.EOF
 	}
 	switch f.Kind {
 	case transport.Kind_KIND_END:
 		st := s.applyEnd(f)
 		if st.Code != codes.OK {
-			return st
+			return nil, st
 		}
-		return io.EOF
+		return nil, io.EOF
 	case transport.Kind_KIND_RST:
 		st := s.applyEnd(f)
 		if st.Code == codes.OK {
 			st = &Status{Code: codes.Canceled, Message: "stream reset"}
 		}
-		return st
+		return nil, st
 	default:
-		return io.EOF
+		return nil, io.EOF
 	}
 }
 

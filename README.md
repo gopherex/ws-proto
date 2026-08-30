@@ -361,6 +361,26 @@ close). These are public contract, pinned by the invariant test suite:
 
 ---
 
+## Proto-agnostic proxying (Go server)
+
+A gateway can relay RPCs without importing any generated code: the method name
+travels on the OPEN frame (`Stream.Method()`), payloads are opaque bytes.
+
+- `wsrpc.WithUnknownHandler(h)` installs a fallback `Handler` invoked for any
+  method with no registered handler (instead of `codes.Unimplemented`).
+  Middleware wraps it like any registered handler.
+- `Stream.SendRaw(b)` / `Stream.RecvRaw()` send and receive MSG payloads without
+  marshaling. Flow control, drain-first delivery and terminal semantics are
+  identical to `Send`/`Recv` (`io.EOF` on clean END, `*Status` — code, message
+  **and details** — as the error otherwise).
+
+The relay shape (upstream may be another wsrpc conn or a gRPC client stream with
+a passthrough codec): pump `down.RecvRaw() → up.Send`, `up.Recv → down.SendRaw()`;
+on downstream `io.EOF` half-close the upstream; on upstream end copy trailers
+with `down.SetTrailer(...)` and return the upstream error as-is — `FromError`
+preserves gRPC status codes and details. See `wsrpc/proxy_test.go` for a
+complete two-hop example.
+
 ## Middleware & gRPC interceptors (Go)
 
 Two complementary mechanisms add cross-cutting behavior on the server.

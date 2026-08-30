@@ -56,6 +56,7 @@ type serverConfig struct {
 	connContext        func(ctx context.Context, r *http.Request) context.Context
 	middleware         []Middleware
 	stats              *ServerStats
+	unknownHandler     Handler
 }
 
 // ServerOption configures a Server.
@@ -141,6 +142,15 @@ func WithCompression(m CompressionMode) ServerOption {
 // middleware passed runs outermost. Multiple calls accumulate in order.
 func WithMiddleware(mw ...Middleware) ServerOption {
 	return func(c *serverConfig) { c.middleware = append(c.middleware, mw...) }
+}
+
+// WithUnknownHandler installs a fallback Handler invoked for any method that has
+// no registered handler, instead of answering codes.Unimplemented. Middleware
+// wraps it exactly as it wraps registered handlers. The handler sees the
+// requested method via Stream.Method() and typically relays frames verbatim with
+// Stream.RecvRaw/SendRaw — this is the building block for a proto-agnostic proxy.
+func WithUnknownHandler(h Handler) ServerOption {
+	return func(c *serverConfig) { c.unknownHandler = h }
 }
 
 // WithStats installs a ServerStats observer for transport-level events
