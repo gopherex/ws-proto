@@ -44,7 +44,7 @@ type Stream struct {
 	maxRecvBytes int
 	recvSignal   chan struct{}
 	halfClosed   chan struct{} // closed once when peer half-closes (inbound)
-	ended        chan struct{} // closed once when a terminal END/RST arrives
+	ended        chan struct{} // closed once on local completion or terminal END/RST
 
 	sendDone     bool // guarded by mu
 	halfCloseOne sync.Once
@@ -85,7 +85,8 @@ func newStream(ctx context.Context, mux *Mux, id uint32, method string, initialW
 	return s
 }
 
-// Context returns the stream context, cancelled on end/RST.
+// Context returns the stream context, cancelled on end/RST. On the server it
+// is cancelled after the handler returns and the terminal END write completes.
 func (s *Stream) Context() context.Context { return s.ctx }
 
 // Method returns the fully-qualified RPC method.
@@ -341,8 +342,8 @@ func (s *Stream) RecvRaw() ([]byte, error) {
 		case <-s.ended:
 			return s.recvEnded()
 		case <-s.ctx.Done():
-			// A terminal frame may have closed ctx via failWith/applyEnd; surface a
-			// recorded END/RST in preference to the bare context error.
+			// Local completion or a terminal frame may have cancelled ctx;
+			// surface the recorded status in preference to the bare context error.
 			select {
 			case <-s.ended:
 				return s.recvEnded()
@@ -367,7 +368,7 @@ func (s *Stream) recvEnded() ([]byte, error) {
 	f := s.endFrame
 	s.mu.Unlock()
 	if f == nil {
-		// Terminal via failWith (no frame), e.g. connection drop / overflow.
+		// Terminal via failWith (no frame): local end, connection drop or overflow.
 		if st := s.status(); st != nil && st.Code != codes.OK {
 			return nil, st
 		}
@@ -417,7 +418,10 @@ func (s *Stream) CloseSend() error {
 // BECAUSE its deadline fired has an already-cancelled s.ctx, and writing the
 // terminal END with it would drop the frame so the client never learns the
 // final status. The mux context stays live until the connection itself drops.
+// After the write attempt, terminate locally even if the peer never half-closes
+// or the write fails, releasing blocked Recv/Send calls and context children.
 func (s *Stream) end(st *Status, trailers map[string]string) error {
+	defer s.failWith(st)
 	f := &transport.Frame{
 		StreamId: s.id,
 		Kind:     transport.Kind_KIND_END,
@@ -440,7 +444,7 @@ func (s *Stream) applyEnd(f *transport.Frame) *Status {
 	return st
 }
 
-// failWith is called by mux.failAll / overflow handling to signal an error on
+// failWith is called by local end / mux.failAll / overflow handling to terminate
 // the stream. It records the status, wakes a blocked Recv via the terminal
 // signal (with no frame), and cancels the context.
 func (s *Stream) failWith(err error) {

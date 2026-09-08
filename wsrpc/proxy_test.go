@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"io"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/gopherex/ws-proto/wsrpc"
 	"github.com/stretchr/testify/require"
@@ -74,7 +76,7 @@ func TestProxy_UnknownHandlerRawRelay(t *testing.T) {
 	t.Cleanup(func() { _ = upstream.Close() })
 
 	// Front: zero handlers, relays raw frames for any method.
-	front := wsrpc.NewServer(wsrpc.WithUnknownHandler(rawRelay(upstream)))
+	front := wsrpc.NewServer(wsrpc.WithUnknownHandler(rawRelay(upstream, new(atomic.Int64))))
 
 	frontSrvEnd, frontCliEnd := wsrpc.NewPipe()
 	t.Cleanup(func() { _ = frontSrvEnd.Close(); _ = frontCliEnd.Close() })
@@ -147,7 +149,7 @@ func TestProxy_UnknownHandlerRawRelay(t *testing.T) {
 // rawRelay proxies one downstream stream onto a fresh upstream stream of the
 // same method, copying payloads verbatim in both directions — the shape a
 // gateway uses in production (there the upstream side is gRPC).
-func rawRelay(upstream *wsrpc.ClientConn) wsrpc.Handler {
+func rawRelay(upstream *wsrpc.ClientConn, activePumps *atomic.Int64) wsrpc.Handler {
 	return func(ctx context.Context, down *wsrpc.Stream) error {
 		up, err := upstream.NewStream(ctx, down.Method(), down.Header())
 		if err != nil {
@@ -155,7 +157,9 @@ func rawRelay(upstream *wsrpc.ClientConn) wsrpc.Handler {
 		}
 
 		clientDone := make(chan error, 1)
+		activePumps.Add(1)
 		go func() {
+			defer activePumps.Add(-1)
 			for {
 				b, err := down.RecvRaw()
 				if errors.Is(err, io.EOF) {
@@ -186,5 +190,70 @@ func rawRelay(upstream *wsrpc.ClientConn) wsrpc.Handler {
 				return err
 			}
 		}
+	}
+}
+
+// Repeated upstream completions must release pumpUp even when the client never
+// half-closes its send side. Both connections stay alive throughout the check.
+func TestProxy_ServerEndReleasesPumpUp(t *testing.T) {
+	for _, code := range []codes.Code{codes.OK, codes.Unavailable} {
+		t.Run(code.String(), func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			t.Cleanup(cancel)
+
+			backend := wsrpc.NewServer()
+			backend.Register("/t/Sync", func(ctx context.Context, s *wsrpc.Stream) error {
+				b, err := s.RecvRaw()
+				if err != nil {
+					return err
+				}
+				if err := s.SendRaw(b); err != nil {
+					return err
+				}
+				s.SetTrailer(map[string]string{"x-sync": "done"})
+				if code == codes.OK {
+					return nil
+				}
+				return wsrpc.Errorf(code, "upstream stopped")
+			})
+			backendSrv, backendCli := wsrpc.NewPipe()
+			go backend.ServeConn(ctx, backendSrv)
+			upstream, err := wsrpc.DialConn(ctx, backendCli)
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = upstream.Close() })
+
+			var activePumps atomic.Int64
+			front := wsrpc.NewServer(wsrpc.WithUnknownHandler(rawRelay(upstream, &activePumps)))
+			frontSrv, frontCli := wsrpc.NewPipe()
+			go front.ServeConn(ctx, frontSrv)
+			cc, err := wsrpc.DialConn(ctx, frontCli)
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = cc.Close() })
+
+			for i := 0; i < 100; i++ {
+				s, err := cc.NewStream(ctx, "/t/Sync", nil)
+				require.NoError(t, err)
+				require.NoError(t, s.Send(&wrapperspb.Int32Value{Value: int32(i)}))
+				// Deliberately no CloseSend: pumpUp forwards the request and then
+				// waits in down.RecvRaw while the backend ends its response.
+				var response wrapperspb.Int32Value
+				require.NoError(t, s.Recv(&response))
+				require.Equal(t, int32(i), response.Value)
+				err = s.Recv(&response)
+				if code == codes.OK {
+					require.ErrorIs(t, err, io.EOF)
+					require.Equal(t, "done", s.Trailer()["x-sync"])
+				} else {
+					require.Error(t, err)
+					require.Equal(t, code, wsrpc.FromError(err).Code)
+				}
+			}
+
+			// Count these goroutines directly, avoiding unrelated runtime/test
+			// goroutines. Closing either pipe or cancelling ctx would mask the leak.
+			require.Eventually(t, func() bool { return activePumps.Load() == 0 },
+				time.Second, time.Millisecond, "pumpUp goroutines leaked after server END")
+			require.NoError(t, ctx.Err())
+		})
 	}
 }

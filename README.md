@@ -381,6 +381,13 @@ with `down.SetTrailer(...)` and return the upstream error as-is — `FromError`
 preserves gRPC status codes and details. See `wsrpc/proxy_test.go` for a
 complete two-hop example.
 
+When the server handler returns, wsrpc writes END, then marks the local stream
+terminal and cancels `Stream.Context()`, including when the END write fails.
+This releases a relay pump waiting in `down.RecvRaw()` even if the client has
+kept its send side open. After buffered messages are drained, `Recv`/`RecvRaw`
+return `io.EOF` for OK or the final `*Status` for an error. The connection stays
+open for other RPCs; the client does not need to acknowledge END.
+
 ## Middleware & gRPC interceptors (Go)
 
 Two complementary mechanisms add cross-cutting behavior on the server.
