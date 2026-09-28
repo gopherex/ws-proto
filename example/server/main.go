@@ -74,7 +74,8 @@ func main() {
 	}
 
 	// Example only: accept any Origin. In production restrict browser clients
-	// with wsrpc.WithOriginPatterns("app.example.com") instead.
+	// with wsrpc.WithSameOriginOnly() or
+	// wsrpc.WithOriginPatterns("app.example.com") instead.
 	srv := wsrpc.NewServer(wsrpc.WithInsecureSkipOriginCheck())
 	echov1.RegisterEchoServiceHandler(srv, impl{})
 

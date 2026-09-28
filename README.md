@@ -182,7 +182,8 @@ npx buf generate   # emits *_pb.ts (messages) and *_ws_pb.ts (clients)
 srv := wsrpc.NewServer(
     // REQUIRED: an origin policy. The server fails closed — it rejects every
     // upgrade (HTTP 403) unless you choose one of:
-    //   WithOriginPatterns("app.example.com")  // restrict browser origins (CSRF defense)
+    //   WithSameOriginOnly()                   // same-origin pages + non-browser clients only
+    //   WithOriginPatterns("app.example.com")  // ...plus these cross-origin frontends (CSRF defense)
     //   WithInsecureSkipOriginCheck()          // accept any origin (only if auth gates the Upgrade)
     wsrpc.WithOriginPatterns("app.example.com"),
     // Cap concurrent server streams per connection (default 1000); excess OPENs
@@ -642,11 +643,23 @@ location /rpc {
   request headers** — set them client-side with `wsrpc.WithHeader(...)` and read
   them server-side with `wsrpc.WithConnContext(...)`. These are visible to proxies
   for routing/authorization; per-RPC metadata stays in-band and is not.
-- The server **fails closed** on origin policy: it rejects every upgrade (HTTP
-  403) unless you set `wsrpc.WithOriginPatterns(...)` (your real frontend origins;
-  correct CSRF behavior) **or** `wsrpc.WithInsecureSkipOriginCheck()` (accept any
-  origin — only safe when auth gates the Upgrade request). Use `"*"` as a pattern
-  to allow any origin while still satisfying the policy gate.
+- The server **fails closed** on origin policy: with no origin option at all it
+  rejects every upgrade (HTTP 403). Choose one explicitly:
+
+  | Option | No `Origin` header (non-browser) | Same origin (`Origin` host == `Host`) | Other origins |
+  |---|---|---|---|
+  | *(none)* | 403 | 403 | 403 |
+  | `wsrpc.WithSameOriginOnly()` | allowed | allowed | 403 |
+  | `wsrpc.WithOriginPatterns()` (explicit empty list) | allowed | allowed | 403 |
+  | `wsrpc.WithOriginPatterns("app.example.com", "*.example.com")` | allowed | allowed | allowed if matched, else 403 |
+  | `wsrpc.WithOriginPatterns("*")` | allowed | allowed | allowed |
+  | `wsrpc.WithInsecureSkipOriginCheck()` | allowed | allowed | allowed (check skipped) |
+
+  `WithSameOriginOnly()` is the safe default when the page and the WebSocket
+  endpoint share a host (behind a proxy, make sure it forwards the original
+  `Host`). Patterns use `path.Match` syntax on the origin host. The last of
+  `WithSameOriginOnly` / `WithOriginPatterns` wins; `WithInsecureSkipOriginCheck`
+  (only safe when auth gates the Upgrade request) overrides both.
 - The client validates the negotiated `wsrpc.v1` subprotocol after the handshake
   and rejects a connection where the server (or a proxy) failed to select it.
 - Trust `X-Forwarded-For` / `X-Forwarded-Proto` only when set by a proxy you control.

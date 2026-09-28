@@ -45,6 +45,7 @@ const (
 
 type serverConfig struct {
 	originPatterns     []string
+	originConfigured   bool
 	insecureSkipOrigin bool
 	readLimit          int64
 	keepalive          time.Duration
@@ -62,19 +63,44 @@ type serverConfig struct {
 // ServerOption configures a Server.
 type ServerOption func(*serverConfig)
 
-// WithOriginPatterns restricts accepted WebSocket Origin headers (CSRF defense).
-// Configuring it satisfies the fail-closed origin gate (see NewServer). Pass "*"
-// to match any origin (equivalent to disabling the browser Origin check).
+// WithOriginPatterns sets the browser origins allowed to open a WebSocket in
+// addition to the server's own origin (CSRF / cross-site WebSocket hijacking
+// defense). Requests without an Origin header (non-browser clients) and
+// same-origin requests (Origin host == request Host) are always accepted;
+// any other Origin must match one of patterns (path.Match syntax on the
+// origin host, e.g. "app.example.com" or "*.example.com"). Pass "*" to match
+// any origin.
+//
+// Calling it satisfies the fail-closed origin gate (see ServeHTTP) even with
+// zero patterns: WithOriginPatterns() is an explicit empty list and behaves
+// exactly like WithSameOriginOnly. The last origin option given wins.
 func WithOriginPatterns(patterns ...string) ServerOption {
-	return func(c *serverConfig) { c.originPatterns = patterns }
+	return func(c *serverConfig) {
+		c.originPatterns = patterns
+		c.originConfigured = true
+	}
+}
+
+// WithSameOriginOnly selects the strictest browser-safe origin policy:
+// upgrades are accepted from same-origin pages (Origin host == request Host)
+// and from non-browser clients that send no Origin header; every cross-origin
+// page is rejected with 403. It satisfies the fail-closed origin gate (see
+// ServeHTTP) and is equivalent to WithOriginPatterns() with no patterns. The
+// last origin option given wins, so it discards earlier WithOriginPatterns.
+func WithSameOriginOnly() ServerOption {
+	return func(c *serverConfig) {
+		c.originPatterns = nil
+		c.originConfigured = true
+	}
 }
 
 // WithInsecureSkipOriginCheck disables the WebSocket Origin check entirely,
-// accepting upgrades from ANY origin. It is the explicit opt-out required to run
-// without WithOriginPatterns (the server otherwise rejects every upgrade — see
-// NewServer). Only safe when cross-origin access is intended OR auth is enforced
-// on the Upgrade request (e.g. via WithConnContext); otherwise it exposes the
-// server to cross-site WebSocket hijacking.
+// accepting upgrades from ANY origin. It is the explicit opt-out for running
+// without WithOriginPatterns / WithSameOriginOnly (the server otherwise rejects
+// every upgrade — see ServeHTTP) and takes precedence over them. Only safe when
+// cross-origin access is intended OR auth is enforced on the Upgrade request
+// (e.g. via WithConnContext); otherwise it exposes the server to cross-site
+// WebSocket hijacking.
 func WithInsecureSkipOriginCheck() ServerOption {
 	return func(c *serverConfig) { c.insecureSkipOrigin = true }
 }

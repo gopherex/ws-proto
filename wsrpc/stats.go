@@ -24,7 +24,8 @@ type ServerStats struct {
 	ConnClosed func(ctx context.Context)
 	// ConnRejected fires when an upgrade never becomes a connection, with the
 	// HTTP request context. Reasons: "origin_policy" (fail-closed origin gate,
-	// see NewServer), "upgrade" (websocket handshake failed).
+	// see Server.ServeHTTP), "upgrade" (websocket handshake failed, including a
+	// browser Origin rejected by the configured origin policy).
 	ConnRejected func(ctx context.Context, reason string)
 	// StreamStarted fires when a dispatched stream reaches its handler chain.
 	StreamStarted func(ctx context.Context, method string)

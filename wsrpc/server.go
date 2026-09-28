@@ -39,12 +39,15 @@ func (s *Server) Register(method string, h Handler) {
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Fail closed on origin policy: an operator must make an explicit choice via
-	// WithOriginPatterns (restrict) or WithInsecureSkipOriginCheck (allow all).
-	// With neither, every upgrade is rejected rather than silently accepting
-	// cross-origin clients (CSRF / cross-site WebSocket hijacking defense).
-	if len(s.cfg.originPatterns) == 0 && !s.cfg.insecureSkipOrigin {
+	// WithSameOriginOnly / WithOriginPatterns (restrict) or
+	// WithInsecureSkipOriginCheck (allow all). With none of them, every upgrade
+	// is rejected rather than silently accepting cross-origin clients (CSRF /
+	// cross-site WebSocket hijacking defense). Once configured, websocket.Accept
+	// enforces the policy: no Origin header and same-origin requests always pass,
+	// any other Origin must match originPatterns.
+	if !s.cfg.originConfigured && !s.cfg.insecureSkipOrigin {
 		s.cfg.stats.connRejected(r.Context(), statsReasonOriginPolicy)
-		http.Error(w, "wsrpc: origin policy not configured (use WithOriginPatterns or WithInsecureSkipOriginCheck)", http.StatusForbidden)
+		http.Error(w, "wsrpc: origin policy not configured (use WithSameOriginOnly, WithOriginPatterns or WithInsecureSkipOriginCheck)", http.StatusForbidden)
 		return
 	}
 	c, err := websocket.Accept(w, r, &websocket.AcceptOptions{
