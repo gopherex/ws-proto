@@ -546,6 +546,32 @@ handlers can set the same via `wsrpc.SetHeader`/`wsrpc.SetTrailer`).
 **Limitation:** a stream interceptor that wraps the `ServerStream` must delegate
 `SendMsg`/`RecvMsg` to the embedded stream (the idiomatic pattern).
 
+### Serving any gRPC service without ws codegen
+
+`wsrpc.GRPCRegistrar` is a `grpc.ServiceRegistrar`: pass it to any
+protoc-gen-go-grpc `RegisterXxxServer` and the service is served over wsrpc by
+driving its `grpc.ServiceDesc` handlers with the gRPC proto codec — no
+protoc-gen-go-ws output needed (works for third-party services such as
+`grpc.health.v1.Health` too):
+
+```go
+srv := wsrpc.NewServer(wsrpc.WithOriginPatterns("app.example.com"))
+echov1.RegisterEchoServiceServer(wsrpc.GRPCRegistrar(srv), impl)
+
+// Same BridgeOption values as XxxServiceFromGRPC:
+reg := wsrpc.GRPCRegistrar(srv,
+    wsrpc.WithUnaryInterceptor(authUnary),
+    wsrpc.WithStreamInterceptor(authStream),
+)
+hv1.RegisterHealthServer(reg, health.NewServer())
+```
+
+Methods register under their gRPC full names (`/pkg.Service/Method`), OPEN
+headers arrive as incoming gRPC metadata, interceptors receive the real
+`UnaryServerInfo` / `StreamServerInfo`, and response header/trailer metadata
+propagates exactly as with the bridge above. The registrar also implements
+`GetServiceInfo()` like `*grpc.Server`.
+
 ---
 
 ## Deploying behind a proxy
