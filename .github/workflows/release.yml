@@ -109,12 +109,11 @@ jobs:
       TAG: ${{ github.ref_name }}
     steps:
       - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
         with:
           targets: ${{ matrix.target }}
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: ${{ matrix.target }}
+      # No build cache here: release artifacts come from a clean build so a
+      # poisoned cache cannot end up in a published binary.
       - name: Build protoc-gen-ws-rs
         run: cargo build --release --locked -p protoc-gen-ws-rs --target ${{ matrix.target }}
       - name: Archive (unix)
