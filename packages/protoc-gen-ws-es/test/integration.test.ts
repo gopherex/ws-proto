@@ -31,18 +31,20 @@ const WS_URL = `ws://${ADDR}/`;
 let server: ChildProcessWithoutNullStreams;
 let buildDir = "";
 
+const serverLabel = process.env.WS_PROTO_SERVER_BIN ? "rust-server" : "go-server";
+
 function waitForListening(proc: ChildProcessWithoutNullStreams): Promise<void> {
   return new Promise((res, rej) => {
     const timer = setTimeout(() => rej(new Error("server did not become ready in 20s")), 20000);
     proc.stdout.on("data", (buf: Buffer) => {
       const line = buf.toString();
-      process.stdout.write(`[go-server] ${line}`);
+      process.stdout.write(`[${serverLabel}] ${line}`);
       if (line.includes("LISTENING")) {
         clearTimeout(timer);
         res();
       }
     });
-    proc.stderr.on("data", (buf: Buffer) => process.stderr.write(`[go-server:err] ${buf}`));
+    proc.stderr.on("data", (buf: Buffer) => process.stderr.write(`[${serverLabel}:err] ${buf}`));
     proc.on("exit", (code) => {
       clearTimeout(timer);
       rej(new Error(`server exited early with code ${code}`));
@@ -60,15 +62,20 @@ beforeAll(async () => {
     BidiRequestSchema,
   } = await import("./gen/echo_pb.js"));
 
-  // Build the Go server to a real binary first so killing the spawned process
+  // WS_PROTO_SERVER_BIN points at an alternative server implementing the same
+  // contract (the Rust example server, via `make test-interop`). Otherwise
+  // build the Go server to a real binary first so killing the spawned process
   // actually terminates the listener (`go run` forks a separate child that can
   // outlive the wrapper and leak the bound port between runs).
-  buildDir = mkdtempSync(resolve(tmpdir(), "ws-proto-server-"));
-  const bin = resolve(buildDir, "server");
-  execFileSync("go", ["build", "-o", bin, "./example/server"], {
-    cwd: repoRoot,
-    stdio: "inherit",
-  });
+  let bin = process.env.WS_PROTO_SERVER_BIN ?? "";
+  if (!bin) {
+    buildDir = mkdtempSync(resolve(tmpdir(), "ws-proto-server-"));
+    bin = resolve(buildDir, "server");
+    execFileSync("go", ["build", "-o", bin, "./example/server"], {
+      cwd: repoRoot,
+      stdio: "inherit",
+    });
+  }
 
   server = spawn(bin, [], {
     cwd: repoRoot,
@@ -86,7 +93,7 @@ afterAll(() => {
   }
 });
 
-describe("TS client <-> Go wsrpc server", () => {
+describe(`TS client <-> ${process.env.WS_PROTO_SERVER_BIN ? "Rust" : "Go"} wsrpc server`, () => {
   it("unary: Unary", async () => {
     const transport = new WsTransport(WS_URL);
     try {

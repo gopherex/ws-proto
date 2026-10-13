@@ -23,3 +23,21 @@ generate:
       out: .
       opts:
         paths: source_relative
+    # Rust golden crate: rust/echo-proto is fully generated (make gen-example
+    # puts protoc-gen-ws-rs on PATH from target/debug). The tonic output is
+    # only there so the example can serve a tonic service via register_grpc.
+    - name: prost
+      out: rust/echo-proto/src
+      opts:
+        bytes: "."
+    - name: tonic
+      out: rust/echo-proto/src
+      opts:
+        no_client: true
+        no_transport: true
+    - name: ws-rs
+      out: rust/echo-proto/src
+    - name: prost-crate
+      out: rust/echo-proto
+      opts:
+        gen_crate: rust/echo-proto.Cargo.toml.tmpl

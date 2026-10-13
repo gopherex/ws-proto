@@ -5,7 +5,7 @@ A WebSocket transport for protobuf RPC services — the WebSocket analog of gRPC
 number of concurrent RPC streams (unary, server-streaming, client-streaming,
 bidi) using a small protobuf framing envelope.
 
-It ships two code generators and two runtimes:
+It ships three code generators and three runtimes:
 
 | Unit | Language | Analog | Provides |
 |---|---|---|---|
@@ -13,6 +13,8 @@ It ships two code generators and two runtimes:
 | `@gopherex/protoc-gen-ws-es` | TypeScript (`@bufbuild/protoplugin`) | `protoc-gen-connect-es` | `*_ws_pb.ts`: typed service client |
 | `wsrpc` (Go module) | Go | grpc-go / connect runtime | mux, framing, HTTP-upgrade server, dial client |
 | `@gopherex/ws-proto-transport` | TypeScript | connect-web transport | mux, framing, browser/node client |
+| `protoc-gen-ws-rs` | Rust ([`protoc-gen-prost`](https://github.com/neoeinstein/protoc-gen-prost) lib) | `protoc-gen-tonic` | `<pkg>.ws.rs`: `<Svc>Handler` trait + registrar, typed `<Svc>Client`, stream wrappers |
+| `ws-proto` + `ws-proto-frame` (crates) | Rust (tokio) | tonic runtime | mux, framing, flow control, WebSocket server/client over `tokio-tungstenite` |
 
 The ES generator interoperates with [`protoc-gen-es`](https://github.com/bufbuild/protobuf-es)
 v2 output (it imports the generated `*_pb.ts` message types and schemas).
@@ -171,6 +173,115 @@ inputs:
 ```bash
 npx buf generate   # emits *_pb.ts (messages) and *_ws_pb.ts (clients)
 ```
+
+### Rust (protoc-gen-prost + protoc-gen-ws-rs + protoc-gen-prost-crate)
+
+The Rust side is plugin-driven, not `build.rs`-driven: messages come from
+[`protoc-gen-prost`](https://github.com/neoeinstein/protoc-gen-prost), service
+bindings from `protoc-gen-ws-rs` (same `out`, it appends an `include!` to the
+prost file through the `module` insertion point), and `protoc-gen-prost-crate`
+turns the output into a crate — `Cargo.toml` from your template plus a
+`src/lib.rs` module tree with one cargo feature per protobuf package.
+
+```yaml
+generate:
+  inputs:
+    - directory: proto
+  plugins:
+    - { name: prost,       out: gen/src, opts: { bytes: "." } }
+    - { name: ws-rs,       out: gen/src }
+    - { name: prost-crate, out: gen,     opts: { gen_crate: Cargo.toml.tmpl } }
+```
+
+Already have a tonic service (`protoc-gen-tonic` output)? Skip `ws-rs` and register it
+as is: `server.register_grpc(EchoServiceServer::new(impl))` (see below).
+
+```toml
+# Cargo.toml.tmpl — copied to gen/Cargo.toml; the features block is filled in.
+[package]
+name = "my-proto"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+bytes = "1"
+prost = "0.14"
+ws-proto = "1"
+
+[features]
+default = ["proto_full"]
+## @@protoc_insertion_point(features)
+```
+
+```bash
+easyp generate   # emits gen/Cargo.toml, gen/src/lib.rs, <pkg>.rs (messages), <pkg>.ws.rs (bindings)
+```
+
+This repo's own `crates/ws-proto-frame` (the `Frame` envelope) and the golden
+`example/rust/echo-proto` are produced the same way (`make gen`, `make gen-example`).
+
+Generated shape, for `service EchoService` in package `echo.v1`
+(`echo::v1::echo_service_ws`):
+
+```rust
+use echo_proto::echo::v1::{echo_service_ws::*, *};
+use ws_proto::{Request, Response, Status};
+
+struct Impl;
+impl EchoServiceHandler for Impl {
+    async fn unary(&self, req: Request<UnaryRequest>) -> Result<Response<UnaryResponse>, Status> {
+        Ok(Response::new(UnaryResponse { greeting: format!("hello {}", req.msg.name) })
+            .with_trailer("served-by", "rust"))
+    }
+    async fn server_stream(&self, req: Request<ServerStreamRequest>, s: ServerStreamServerStream) -> Result<(), Status> {
+        for index in 0..req.msg.count { s.send(&ServerStreamResponse { index }).await?; }
+        Ok(())
+    }
+    async fn client_stream(&self, s: ClientStreamServerStream) -> Result<Response<ClientStreamResponse>, Status> {
+        let mut sum = 0;
+        while let Some(r) = s.recv().await? { sum += r.value; }
+        Ok(ClientStreamResponse { sum }.into())
+    }
+    async fn bidi(&self, s: BidiServerStream) -> Result<(), Status> {
+        while let Some(r) = s.recv().await? { s.send(&BidiResponse { echo: r.text }).await?; }
+        Ok(())
+    }
+}
+
+// server
+let server = ws_proto::Server::new(ws_proto::ServerConfig {
+    origin: ws_proto::server::OriginPolicy::same_origin_only(), ..Default::default()
+});
+register_echo_service(&server, Impl);
+server.serve_listener(tokio::net::TcpListener::bind("127.0.0.1:8910").await?).await?;
+
+// client
+let conn = ws_proto::Client::dial("ws://127.0.0.1:8910/", Default::default()).await?;
+let client = EchoServiceClient::new(conn);
+let res = client.unary(UnaryRequest { name: "bob".into() }).await?;   // res.msg, res.header, res.trailer
+let s = client.bidi(ws_proto::CallOptions::new().with_timeout(Duration::from_secs(5))).await?;
+```
+
+Server semantics match Go: unknown method → `Unimplemented "unknown method /x"`,
+handler panic → `Internal`, `ws-timeout-ms` → handler cancelled and the stream
+ended with `DeadlineExceeded`, 1000 concurrent streams per connection,
+keepalive pings (20s / 10s) on upgraded sockets, fail-closed origin policy
+(`OriginPolicy::Unconfigured` rejects every upgrade; pick `same_origin_only()`,
+`Patterns([...])` or `InsecureSkip`). Any `Stream + Sink` of
+`ws_proto::conn::Message` is a transport (`WsConn`), so other WebSocket crates
+or in-memory pipes (`ws_proto::conn::pipe`) plug in.
+
+The rest of the Go surface is there too, same shapes:
+
+| Go | Rust |
+|---|---|
+| `WithReconnect(WithBackoff(..))` | `ClientConfig { reconnect: Some(Reconnect { initial, max }), .. }` — redial with capped exponential backoff + full jitter; `new_stream` waits out the gap (bounded by its timeout) |
+| `WithDialKeepalive` / `WithKeepalive` | `ClientConfig.keepalive` / `ServerConfig.keepalive` (`Keepalive { interval, timeout }`, `Keepalive::DISABLED`) |
+| `WithClientInterceptor(Interceptor)` | `ClientConfig::with_interceptor(impl Interceptor)` — `wrap_unary(UnaryFunc)` / `wrap_streaming(StreamingFunc)` over `AnyRequest`/`AnyResponse`/`StreamingClientConn`; helpers `unary_fn`, `streaming_fn`, `UnaryInterceptorFn`, `StreamInterceptorFn` |
+| `WithMiddleware(func(Handler) Handler)` | `Server::add_middleware(Fn(Handler) -> Handler)` — first added is outermost, wraps the unknown-method fallback too |
+| `WithUnknownHandler` | `Server::set_unknown_handler` |
+| `WithStats(*ServerStats)` | `Server::set_stats(Arc<dyn ServerStats>)` — same events and rejection reasons |
+| `wsrpc.GRPCRegistrar(srv)` + `RegisterXxxServer(registrar, impl)` | `server.register_grpc(EchoServiceServer::new(impl))` (crate feature `ws-proto/tonic`): any tonic / tower gRPC service — generated servers, `tonic::service::interceptor`, tower layers, `tonic-health`, reflection — served over ws-proto unchanged. ws-proto plays the HTTP side per stream: OPEN headers → metadata (`ws-timeout-ms` → `grpc-timeout`), MSG ↔ gRPC length-prefixed frames, response headers → HEADER, `grpc-status`/`grpc-message`/`grpc-status-details-bin` + other trailers → END (details as the `google.rpc.Status.details` `Any` list, same bytes Go sends). No plugin option, no generated glue. ws-proto middleware, stats, deadlines and tower layers / `tonic::service::interceptor` all apply. tonic cannot attach trailers to a successful response ([grpc-rust#1370](https://github.com/grpc/grpc-rust/issues/1370)); for streams the known workaround — end the stream with `Err(Status::with_metadata(Code::Ok, "", md))` — is mapped to END(OK) + trailers |
 
 ---
 
@@ -688,15 +799,25 @@ location /rpc {
 make help          # list targets
 make test          # gofmt + go vet + go test -race
 make test-ts       # build + test the npm workspaces
-make gen           # regenerate transport/*.pb.go
+make test-rs       # cargo fmt/clippy/test + generate and build the Rust golden crate
+make test-interop  # cross-language matrix over real sockets: Rust<->Go, Go->Rust (native + tonic bridge), TS->Rust
+make gen           # regenerate transport/*.pb.go + crates/ws-proto-frame (needs protoc-gen-prost{,-crate})
 make gen-example   # rebuild the plugin and regenerate the golden example/
-make release       # interactive, tag-driven release (Go module + npm share one version)
+make gen-rs-golden # rebuild protoc-gen-ws-rs and regenerate crates/protoc-gen-ws-rs/test/gen
+make release       # interactive, tag-driven release (Go module + npm + cargo share one version)
 ```
+
+Layout: Go at the root (`wsrpc`, `generator`, `cmd/`), TypeScript in the npm
+workspace `packages/*`, Rust in the cargo workspace `crates/*`
+(`ws-proto-frame` generated, `ws-proto` runtime, `protoc-gen-ws-rs` plugin) plus
+`example/rust/*` (generated `echo-proto`, `server` binary used by the interop
+matrix, same `LISTENING <addr>` readiness contract as `example/server`).
 
 Pushing a `vX.Y.Z` tag (produced by `make release`) triggers
 `.github/workflows/release.yml`: it gates on CI, builds the `protoc-gen-go-ws`
 binaries for all platforms and attaches them to a GitHub Release, and publishes
-both npm packages to GitHub Packages.
+both npm packages to GitHub Packages. (crates.io publishing of the Rust crates
+is not wired into the workflow yet.)
 
 ---
 

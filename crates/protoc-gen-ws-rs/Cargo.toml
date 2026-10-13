@@ -1,0 +1,22 @@
+[package]
+name = "protoc-gen-ws-rs"
+description = "Protocol Buffers compiler plugin: ws-proto (WebSocket RPC) service bindings for Rust, powered by Prost!"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "README.md"
+keywords = ["protobuf", "websocket", "rpc", "prost", "protoc"]
+categories = ["encoding", "development-tools::build-utils"]
+
+[dependencies]
+heck.workspace = true
+prettyplease.workspace = true
+proc-macro2.workspace = true
+prost.workspace = true
+prost-build.workspace = true
+prost-types.workspace = true
+protoc-gen-prost.workspace = true
+quote.workspace = true
+syn.workspace = true

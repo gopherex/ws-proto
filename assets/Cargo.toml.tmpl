@@ -1,0 +1,20 @@
+# Template for protoc-gen-prost-crate (gen_crate=assets/Cargo.toml.tmpl).
+# `make gen` copies it to crates/ws-proto-frame/Cargo.toml; edit it here, not there.
+[package]
+name = "ws-proto-frame"
+description = "ws-proto wire envelope (wsproto.transport.v1) — prost types generated from transport/transport.proto"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords = ["protobuf", "websocket", "rpc", "prost"]
+categories = ["encoding"]
+
+[dependencies]
+bytes.workspace = true
+prost.workspace = true
+
+[features]
+default = ["proto_full"]
+## @@protoc_insertion_point(features)

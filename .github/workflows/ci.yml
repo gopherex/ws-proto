@@ -62,3 +62,33 @@ jobs:
       - name: typecheck workspaces (incl. tests)
         # Runs after test so the generated client under test/gen exists.
         run: npm run --workspaces typecheck
+
+  rust:
+    name: Rust (fmt, clippy, test, golden gen)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      # The golden run drives protoc-gen-ws-rs through easyp next to the
+      # neoeinstein prost plugins, exactly as a user would.
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.25"
+          cache-dependency-path: go.sum
+      - name: install codegen plugins
+        run: |
+          go install github.com/easyp-tech/easyp/cmd/easyp@latest
+          cargo install protoc-gen-prost protoc-gen-prost-crate protoc-gen-tonic --locked
+      - name: test-rs
+        run: make test-rs
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: npm
+      - name: npm ci (TS client for the interop matrix)
+        run: npm ci && npm run --workspaces build
+      - name: test-interop
+        run: make test-interop
