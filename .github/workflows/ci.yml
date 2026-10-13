@@ -80,7 +80,7 @@ jobs:
           cache-dependency-path: go.sum
       - name: install codegen plugins
         run: |
-          go install github.com/easyp-tech/easyp/cmd/easyp@latest
+          go install github.com/easyp-tech/easyp/cmd/easyp@v0.16.6  # v0.17+ needs go >= 1.26 and changes config
           cargo install protoc-gen-prost protoc-gen-prost-crate protoc-gen-tonic --locked
       - name: test-rs
         run: make test-rs

@@ -214,6 +214,23 @@ func (m *Mux) route(f *transport.Frame) {
 		if m.onOpen == nil {
 			return // clients ignore OPEN
 		}
+		// A second OPEN on a live stream id must not replace the registered
+		// stream: the first handler would keep running outside the max-streams
+		// accounting. Reject it without touching the existing stream.
+		m.mu.Lock()
+		_, dup := m.streams[f.StreamId]
+		m.mu.Unlock()
+		if dup {
+			m.writeCtrl(&transport.Frame{
+				StreamId: f.StreamId,
+				Kind:     transport.Kind_KIND_RST,
+				Status: statusToProto(&Status{
+					Code:    codes.Internal,
+					Message: "duplicate stream id",
+				}),
+			})
+			return
+		}
 		// Bound concurrent server streams: reject an OPEN past the cap with an
 		// RST(ResourceExhausted) without allocating a Stream or handler goroutine.
 		// The RST goes through writeCtrl so the read loop never blocks (see C1).

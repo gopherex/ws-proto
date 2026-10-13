@@ -50,6 +50,38 @@ func TestMaxConcurrentStreamsRejectsOverLimit(t *testing.T) {
 	}
 }
 
+// TestDuplicateOpenRejected verifies a second OPEN on a live stream id is
+// answered with an RST and does not dispatch a second handler (which would
+// run outside the max-streams accounting).
+func TestDuplicateOpenRejected(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	gotStream := make(chan *Stream, 8)
+	srvEnd, peer := newPipe()
+	_ = newMuxConfig(ctx, srvEnd, func(s *Stream) { gotStream <- s }, defaultReceiveBuffer, defaultInitialWindow, 0, nil)
+
+	require.NoError(t, peer.WriteFrame(ctx, &transport.Frame{StreamId: 1, Kind: transport.Kind_KIND_OPEN, Method: "/t/M"}))
+	select {
+	case <-gotStream:
+	case <-time.After(time.Second):
+		t.Fatal("first OPEN not dispatched")
+	}
+
+	require.NoError(t, peer.WriteFrame(ctx, &transport.Frame{StreamId: 1, Kind: transport.Kind_KIND_OPEN, Method: "/t/M"}))
+	rst := readFrameTimeout(t, ctx, peer, time.Second)
+	require.Equal(t, uint32(1), rst.StreamId)
+	require.Equal(t, transport.Kind_KIND_RST, rst.Kind)
+	require.Equal(t, int32(codes.Internal), rst.Status.Code)
+	require.Equal(t, "duplicate stream id", rst.Status.Message)
+
+	select {
+	case <-gotStream:
+		t.Fatal("duplicate OPEN was dispatched to a handler")
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
 // readFrameTimeout reads one frame from peer or fails after d.
 func readFrameTimeout(t *testing.T, ctx context.Context, peer *pipeConn, d time.Duration) *transport.Frame {
 	t.Helper()
