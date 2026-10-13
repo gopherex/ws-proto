@@ -110,6 +110,26 @@ npm install @gopherex/ws-proto-transport
 npm install -D @gopherex/protoc-gen-ws-es @bufbuild/protoc-gen-es @bufbuild/buf
 ```
 
+### Rust plugin + runtime (git tag, not crates.io)
+
+The crates are not published to crates.io; depend on the release tag. The
+`ws-proto` ↔ `ws-proto-frame` path dependency resolves inside the same git
+checkout, so one line is enough:
+
+```toml
+[dependencies]
+ws-proto = { git = "https://github.com/gopherex/ws-proto", tag = "v1.7.0" }
+# features = ["tonic"] to serve tonic services via Server::register_grpc
+```
+
+```bash
+# neoeinstein's prost plugins (crates.io) + ours, from the tag ...
+cargo install protoc-gen-prost protoc-gen-prost-crate
+cargo install --git https://github.com/gopherex/ws-proto --tag v1.7.0 protoc-gen-ws-rs
+# ... or grab a prebuilt protoc-gen-ws-rs_<tag>_<os>_<arch> archive from the
+# GitHub Release (linux/darwin/windows × amd64/arm64) and put it on PATH.
+```
+
 ---
 
 ## Define your service
@@ -814,10 +834,11 @@ workspace `packages/*`, Rust in the cargo workspace `crates/*`
 matrix, same `LISTENING <addr>` readiness contract as `example/server`).
 
 Pushing a `vX.Y.Z` tag (produced by `make release`) triggers
-`.github/workflows/release.yml`: it gates on CI, builds the `protoc-gen-go-ws`
+`.github/workflows/release.yml`: it gates on CI, checks the cargo workspace
+version matches the tag, builds the `protoc-gen-go-ws` and `protoc-gen-ws-rs`
 binaries for all platforms and attaches them to a GitHub Release, and publishes
-both npm packages to GitHub Packages. (crates.io publishing of the Rust crates
-is not wired into the workflow yet.)
+both npm packages to GitHub Packages. The Rust crates are consumed by git tag
+and are not published to crates.io.
 
 ---
 

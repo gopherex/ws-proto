@@ -1,8 +1,10 @@
 name: Release
 
 # Triggered by pushing a vX.Y.Z tag (see `make release`). Builds the
-# protoc-gen-go-ws plugin binaries for every platform and publishes both npm
-# packages to GitHub Packages, all gated on a green CI run.
+# protoc-gen-go-ws and protoc-gen-ws-rs plugin binaries for every platform and
+# publishes both npm packages to GitHub Packages, all gated on a green CI run.
+# The Rust crates are not published to crates.io: consumers depend on the git
+# tag (`ws-proto = { git = "...", tag = "vX.Y.Z" }`).
 on:
   push:
     tags:
@@ -25,6 +27,13 @@ jobs:
       TAG: ${{ github.ref_name }}
     steps:
       - uses: actions/checkout@v6
+      - name: Check the cargo workspace version matches the tag
+        run: |
+          v="$(grep -m1 '^version = ' Cargo.toml | cut -d'"' -f2)"
+          if [ "v$v" != "$TAG" ]; then
+            echo "::error::Cargo.toml [workspace.package] version is $v but the tag is $TAG (run make release)"
+            exit 1
+          fi
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -76,6 +85,59 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           ASSET: ${{ steps.archive.outputs.asset }}
+        run: gh release upload "$TAG" "$ASSET" --clobber
+
+  # protoc-gen-ws-rs binaries, named like the Go plugin's
+  # (protoc-gen-ws-rs_vX.Y.Z_<os>_<arch>.{tar.gz,zip}). Native runners for
+  # linux/darwin, rustup cross-targets where the host can link them.
+  rust-binaries:
+    needs: create-release
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: ubuntu-latest,      target: x86_64-unknown-linux-gnu,  os: linux,   arch: amd64 }
+          - { runner: ubuntu-24.04-arm,   target: aarch64-unknown-linux-gnu, os: linux,   arch: arm64 }
+          - { runner: macos-latest,       target: aarch64-apple-darwin,      os: darwin,  arch: arm64 }
+          - { runner: macos-latest,       target: x86_64-apple-darwin,       os: darwin,  arch: amd64 }
+          - { runner: windows-latest,     target: x86_64-pc-windows-msvc,    os: windows, arch: amd64 }
+          - { runner: windows-latest,     target: aarch64-pc-windows-msvc,   os: windows, arch: arm64 }
+    env:
+      TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+      - name: Build protoc-gen-ws-rs
+        run: cargo build --release --locked -p protoc-gen-ws-rs --target ${{ matrix.target }}
+      - name: Archive (unix)
+        if: runner.os != 'Windows'
+        id: archive_unix
+        shell: bash
+        run: |
+          base="protoc-gen-ws-rs_${TAG}_${{ matrix.os }}_${{ matrix.arch }}"
+          tar -C "target/${{ matrix.target }}/release" -czf "${base}.tar.gz" protoc-gen-ws-rs
+          echo "asset=${base}.tar.gz" >> "$GITHUB_OUTPUT"
+      - name: Archive (windows)
+        if: runner.os == 'Windows'
+        id: archive_win
+        shell: pwsh
+        run: |
+          $base = "protoc-gen-ws-rs_${env:TAG}_${{ matrix.os }}_${{ matrix.arch }}"
+          Compress-Archive -Path "target/${{ matrix.target }}/release/protoc-gen-ws-rs.exe" -DestinationPath "$base.zip"
+          "asset=$base.zip" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+      - name: Upload to release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ASSET: ${{ steps.archive_unix.outputs.asset || steps.archive_win.outputs.asset }}
         run: gh release upload "$TAG" "$ASSET" --clobber
 
   npm:
