@@ -322,13 +322,23 @@ impl Server {
         // Internal instead of killing the connection task.
         let fut = handler(stream.clone());
         let joined = match stream.timeout() {
-            Some(t) => match tokio::time::timeout(t, tokio::spawn(fut)).await {
-                Ok(j) => j,
-                Err(_elapsed) => Ok(Err(Status::new(
-                    Code::DeadlineExceeded,
-                    "wsrpc: deadline exceeded",
-                ))),
-            },
+            Some(t) => {
+                let task = tokio::spawn(fut);
+                let abort = task.abort_handle();
+                match tokio::time::timeout(t, task).await {
+                    Ok(j) => j,
+                    Err(_elapsed) => {
+                        // Stop the handler too: once the stream is ended it
+                        // leaves the stream count, so letting it run on would
+                        // let a client exceed max_streams via timeouts.
+                        abort.abort();
+                        Ok(Err(Status::new(
+                            Code::DeadlineExceeded,
+                            "wsrpc: deadline exceeded",
+                        )))
+                    }
+                }
+            }
             None => tokio::spawn(fut).await,
         };
         let st = match joined {

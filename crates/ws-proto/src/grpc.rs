@@ -127,9 +127,12 @@ fn build_request(stream: &Stream) -> Result<Request<RequestBody>, Status> {
         .body(RequestBody::new(stream.clone()))
         .map_err(|e| Status::new(Code::Internal, format!("grpc: request: {e}")))?;
     let h = req.headers_mut();
-    h.insert("content-type", HeaderValue::from_static("application/grpc"));
-    h.insert("te", HeaderValue::from_static("trailers"));
     for (k, v) in stream.header() {
+        // Client metadata must not set transport-level or gRPC-reserved
+        // headers (content-type, te, grpc-encoding, grpc-timeout, ...).
+        if is_reserved_request_header(&k) {
+            continue;
+        }
         if let (Ok(name), Ok(value)) = (
             HeaderName::from_bytes(k.as_bytes()),
             HeaderValue::from_str(&v),
@@ -137,6 +140,8 @@ fn build_request(stream: &Stream) -> Result<Request<RequestBody>, Status> {
             h.append(name, value);
         }
     }
+    h.insert("content-type", HeaderValue::from_static("application/grpc"));
+    h.insert("te", HeaderValue::from_static("trailers"));
     if let Some(t) = stream.timeout() {
         let ms = t.as_millis();
         // grpc-timeout: up to 8 digits + unit.
@@ -151,6 +156,28 @@ fn build_request(stream: &Stream) -> Result<Request<RequestBody>, Status> {
     }
     Ok(req)
 }
+
+/// Headers a client may not smuggle in through OPEN metadata.
+fn is_reserved_request_header(name: &str) -> bool {
+    let n = name.to_ascii_lowercase();
+    n.starts_with("grpc-")
+        || n.starts_with(':')
+        || matches!(
+            n.as_str(),
+            "content-type"
+                | "content-length"
+                | "te"
+                | "host"
+                | "connection"
+                | "transfer-encoding"
+                | "upgrade"
+                | "trailer"
+        )
+}
+
+/// Largest gRPC message accepted from a service body (matches the WebSocket
+/// read limit); a bogus length prefix cannot make us buffer without bound.
+const MAX_GRPC_MESSAGE: usize = crate::server::DEFAULT_READ_LIMIT;
 
 /// Response headers → leading metadata, dropping transport-level ones.
 fn metadata_from_headers(headers: &HeaderMap) -> Metadata {
@@ -186,6 +213,12 @@ fn take_message(buf: &mut BytesMut) -> Result<Option<Bytes>, Status> {
         return Err(Status::new(
             Code::Internal,
             "grpc: compressed messages are not supported over ws-proto",
+        ));
+    }
+    if len > MAX_GRPC_MESSAGE {
+        return Err(Status::new(
+            Code::ResourceExhausted,
+            format!("grpc: message of {len} bytes exceeds limit"),
         ));
     }
     if buf.len() < 5 + len {
@@ -328,6 +361,33 @@ mod tests {
             Some(Bytes::from_static(b"de"))
         );
         assert!(buf.is_empty());
+    }
+
+    #[test]
+    fn oversized_length_prefix_rejected() {
+        let mut buf = BytesMut::new();
+        buf.put_u8(0);
+        buf.put_u32(u32::MAX);
+        assert_eq!(
+            take_message(&mut buf).unwrap_err().code,
+            Code::ResourceExhausted
+        );
+    }
+
+    #[test]
+    fn reserved_request_headers_are_dropped() {
+        for h in [
+            "content-type",
+            "TE",
+            "grpc-encoding",
+            "grpc-timeout",
+            ":authority",
+            "host",
+        ] {
+            assert!(is_reserved_request_header(h), "{h}");
+        }
+        assert!(!is_reserved_request_header("authorization"));
+        assert!(!is_reserved_request_header("x-tenant"));
     }
 
     #[test]

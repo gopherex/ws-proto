@@ -345,3 +345,32 @@ async fn unknown_stream_frames_are_ignored() {
     assert_eq!(back.kind, Kind::Msg as i32);
     assert_eq!(back.payload, msg("x"));
 }
+
+#[tokio::test]
+async fn duplicate_open_is_rejected_not_replaced() {
+    let (srv, mut raw) = pipe();
+    let opened = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let o = Arc::clone(&opened);
+    let _server = serve(srv, MuxConfig::default(), move |s| {
+        let o = Arc::clone(&o);
+        async move {
+            o.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            s.ended().await;
+            Ok(())
+        }
+    });
+    for _ in 0..3 {
+        let mut open = frame(1, Kind::Open);
+        open.method = "/m".into();
+        raw_send(&mut raw, open).await;
+    }
+    let rst = raw_recv(&mut raw).await;
+    assert_eq!(rst.kind, Kind::Rst as i32);
+    assert_eq!(rst.status.unwrap().message, "duplicate stream id");
+    tokio::time::sleep(Duration::from_millis(30)).await;
+    assert_eq!(
+        opened.load(std::sync::atomic::Ordering::Relaxed),
+        1,
+        "only the first OPEN starts a handler"
+    );
+}

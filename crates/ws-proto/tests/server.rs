@@ -1,6 +1,6 @@
 //! Server / client semantics over the in-memory pipe and over real TCP.
 
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 
 use ws_proto::{
     conn::pipe, server::OriginPolicy, transport::Frame, CallOptions, Client, ClientConfig, Code,
@@ -229,4 +229,43 @@ async fn tcp_origin_patterns_enforced() {
         .await
         .unwrap_err();
     assert!(err.message.contains("403"), "{err}");
+}
+
+#[tokio::test]
+async fn deadline_aborts_the_running_handler() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let ticks = Arc::new(AtomicUsize::new(0));
+    let t2 = Arc::clone(&ticks);
+    let server = Server::new(ServerConfig::default());
+    server.register("/t/Tick", move |_s| {
+        let t2 = Arc::clone(&t2);
+        async move {
+            loop {
+                t2.fetch_add(1, Ordering::Relaxed);
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        }
+    });
+    let (a, b) = pipe();
+    tokio::spawn(async move { server.serve_conn(a).await });
+    let c = Client::from_conn(b, ClientConfig::default());
+    let st = c
+        .new_stream(
+            "/t/Tick",
+            Default::default(),
+            Some(Duration::from_millis(50)),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        st.recv_raw().await.unwrap_err().code,
+        Code::DeadlineExceeded
+    );
+    let after_deadline = ticks.load(Ordering::Relaxed);
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(
+        ticks.load(Ordering::Relaxed),
+        after_deadline,
+        "handler task must be aborted, not left running"
+    );
 }

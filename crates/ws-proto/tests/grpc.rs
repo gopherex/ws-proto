@@ -398,3 +398,62 @@ async fn tower_layer_over_tonic_service_and_ws_deadline() {
         .unwrap_err();
     assert_eq!(err.code, Code::DeadlineExceeded);
 }
+
+#[tokio::test]
+async fn client_metadata_cannot_override_transport_headers() {
+    /// Reports the request headers it received back through trailers.
+    #[derive(Clone)]
+    struct Inspect;
+    impl tonic::server::NamedService for Inspect {
+        const NAME: &'static str = "test.Inspect";
+    }
+    impl<B: Send + 'static> Service<Request<B>> for Inspect {
+        type Response = Response<BoxBody<Bytes, Infallible>>;
+        type Error = Infallible;
+        type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Infallible>> + Send>>;
+        fn poll_ready(&mut self, _: &mut Context<'_>) -> Poll<Result<(), Infallible>> {
+            Poll::Ready(Ok(()))
+        }
+        fn call(&mut self, req: Request<B>) -> Self::Future {
+            let enc = req.headers().get_all("grpc-encoding").iter().count();
+            let ct = req.headers().get_all("content-type").iter().count();
+            let auth = req.headers().contains_key("authorization");
+            Box::pin(async move {
+                let mut trailers = HeaderMap::new();
+                tonic::Status::ok("").add_header(&mut trailers).unwrap();
+                trailers.insert(
+                    "x-enc-count",
+                    HeaderValue::from_str(&enc.to_string()).unwrap(),
+                );
+                trailers.insert(
+                    "x-ct-count",
+                    HeaderValue::from_str(&ct.to_string()).unwrap(),
+                );
+                trailers.insert(
+                    "x-auth",
+                    HeaderValue::from_static(if auth { "1" } else { "0" }),
+                );
+                let frames = futures_util::stream::iter(vec![Ok::<_, Infallible>(
+                    http_body::Frame::trailers(trailers),
+                )]);
+                Ok(Response::new(BoxBody::new(StreamBody::new(frames))))
+            })
+        }
+    }
+    let server = Server::new(ServerConfig::default());
+    server.register_grpc(Inspect);
+    let c = pair(server);
+    let md: Metadata = [
+        ("grpc-encoding".to_owned(), "gzip".to_owned()),
+        ("content-type".to_owned(), "text/plain".to_owned()),
+        ("authorization".to_owned(), "x".to_owned()),
+    ]
+    .into();
+    let s = c.new_stream("/test.Inspect/Any", md, None).await.unwrap();
+    s.close_send().await.unwrap();
+    assert_eq!(s.recv_raw().await.unwrap(), None);
+    let t = s.trailer();
+    assert_eq!(t.get("x-enc-count").map(String::as_str), Some("0"));
+    assert_eq!(t.get("x-ct-count").map(String::as_str), Some("1"));
+    assert_eq!(t.get("x-auth").map(String::as_str), Some("1"));
+}

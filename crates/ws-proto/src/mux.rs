@@ -344,6 +344,15 @@ impl MuxShared {
         let Some(on_open) = &self.on_open else {
             return; // clients ignore OPEN
         };
+        // A second OPEN on a live id must not replace the registered stream:
+        // the first handler would keep running unaccounted, bypassing the cap.
+        if self.streams.lock().unwrap().contains_key(&f.stream_id) {
+            self.write_ctrl(rst(
+                f.stream_id,
+                Status::new(Code::Internal, "duplicate stream id"),
+            ));
+            return;
+        }
         if self.max_streams > 0 && self.streams.lock().unwrap().len() >= self.max_streams {
             if let Some(st) = &self.stats {
                 st.stream_rejected(reason::MAX_STREAMS);
