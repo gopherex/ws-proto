@@ -27,7 +27,7 @@ prost.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["rt", "sync", "time", "macros"] }
 tokio-util = { workspace = true, features = ["net"] }
-ws-proto-frame = { version = "1.7.0", path = "../ws-proto-frame" }
+ws-proto-frame = { version = "1.8.0", path = "../ws-proto-frame" }
 
 tokio-tungstenite = { workspace = true, optional = true }
 http = { workspace = true, optional = true }
