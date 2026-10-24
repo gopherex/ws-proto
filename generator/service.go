@@ -80,7 +80,6 @@ func (g *Generator) genRegistrar(gf *protogen.GeneratedFile, svc *protogen.Servi
 	srvType := gf.QualifiedGoIdent(wsrpcImport.Ident("Server"))
 	streamType := gf.QualifiedGoIdent(wsrpcImport.Ident("Stream"))
 	ctx := gf.QualifiedGoIdent(contextImport.Ident("Context"))
-	ioEOF := gf.QualifiedGoIdent(ioImport.Ident("EOF"))
 
 	gf.P("// Register", svc.GoName, "Handler registers impl on srv for all ", svc.GoName, " methods.")
 	gf.P("func Register", svc.GoName, "Handler(srv *", srvType, ", impl ", svc.GoName, "Handler) {")
@@ -88,6 +87,9 @@ func (g *Generator) genRegistrar(gf *protogen.GeneratedFile, svc *protogen.Servi
 		route := methodRoute(svc, m)
 		wrapper := serverWrapperName(svc, m)
 		req := gf.QualifiedGoIdent(m.Input.GoIdent)
+		// io.EOF only where a single request is read: qualifying it
+		// imports io, unused by a service of streaming requests only.
+		ioEOF := func() string { return gf.QualifiedGoIdent(ioImport.Ident("EOF")) }
 		gf.P("\tsrv.Register(", strconvQuote(route), ", func(ctx ", ctx, ", s *", streamType, ") error {")
 		switch methodKind(m) {
 		case kindUnary:
@@ -97,7 +99,7 @@ func (g *Generator) genRegistrar(gf *protogen.GeneratedFile, svc *protogen.Servi
 			// wsrpc.SetHeader/SetTrailer; flush it onto the stream after return.
 			withUnaryMD := gf.QualifiedGoIdent(wsrpcImport.Ident("WithUnaryMetadata"))
 			gf.P("\t\treq := new(", req, ")")
-			gf.P("\t\tif err := s.Recv(req); err != nil && err != ", ioEOF, " {")
+			gf.P("\t\tif err := s.Recv(req); err != nil && err != ", ioEOF(), " {")
 			gf.P("\t\t\treturn err")
 			gf.P("\t\t}")
 			gf.P("\t\tctx, umd := ", withUnaryMD, "(ctx)")
@@ -112,7 +114,7 @@ func (g *Generator) genRegistrar(gf *protogen.GeneratedFile, svc *protogen.Servi
 			gf.P("\t\treturn s.Send(res)")
 		case kindServerStream:
 			gf.P("\t\treq := new(", req, ")")
-			gf.P("\t\tif err := s.Recv(req); err != nil && err != ", ioEOF, " {")
+			gf.P("\t\tif err := s.Recv(req); err != nil && err != ", ioEOF(), " {")
 			gf.P("\t\t\treturn err")
 			gf.P("\t\t}")
 			gf.P("\t\treturn impl.", m.GoName, "(ctx, req, &", wrapper, "{stream: s})")
