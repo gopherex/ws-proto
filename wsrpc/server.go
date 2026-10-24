@@ -3,7 +3,9 @@ package wsrpc
 import (
 	"context"
 	"fmt"
+	"maps"
 	"net/http"
+	"slices"
 	"sync"
 
 	"github.com/coder/websocket"
@@ -35,6 +37,14 @@ func (s *Server) Register(method string, h Handler) {
 	s.mu.Lock()
 	s.handlers[method] = h
 	s.mu.Unlock()
+}
+
+// Methods returns the registered methods ("/pkg.Service/Method"), sorted:
+// what a host announces the server as, whichever way they were registered.
+func (s *Server) Methods() []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return slices.Sorted(maps.Keys(s.handlers))
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
