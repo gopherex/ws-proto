@@ -3,6 +3,7 @@ package wsrpc
 import (
 	"context"
 	"errors"
+	"sync"
 
 	"github.com/gopherex/ws-proto/transport"
 )
@@ -12,14 +13,18 @@ type pipeConn struct {
 	in   chan *transport.Frame // frames readable on this end
 	out  chan *transport.Frame // frames written from this end
 	done chan struct{}
+	// closeDone closes done once, whichever end closes first or how many
+	// times; shared by both ends, as done is.
+	closeDone func()
 }
 
 func newPipe() (*pipeConn, *pipeConn) {
 	ab := make(chan *transport.Frame, 16)
 	ba := make(chan *transport.Frame, 16)
 	done := make(chan struct{})
-	a := &pipeConn{in: ba, out: ab, done: done}
-	b := &pipeConn{in: ab, out: ba, done: done}
+	closeDone := sync.OnceFunc(func() { close(done) })
+	a := &pipeConn{in: ba, out: ab, done: done, closeDone: closeDone}
+	b := &pipeConn{in: ab, out: ba, done: done, closeDone: closeDone}
 	return a, b
 }
 
@@ -65,11 +70,8 @@ func (p *pipeConn) ReadFrame(ctx context.Context) (*transport.Frame, error) {
 
 func (p *pipeConn) Ping(ctx context.Context) error { return nil }
 
+// Close closes both ends; it is safe to call concurrently and repeatedly.
 func (p *pipeConn) Close() error {
-	select {
-	case <-p.done:
-	default:
-		close(p.done)
-	}
+	p.closeDone()
 	return nil
 }
