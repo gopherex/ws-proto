@@ -463,7 +463,7 @@ dependencies = [
 
 [[package]]
 name = "protoc-gen-ws-rs"
-version = "1.8.2"
+version = "1.8.3"
 dependencies = [
  "heck",
  "prettyplease",
@@ -865,7 +865,7 @@ dependencies = [
 
 [[package]]
 name = "ws-proto"
-version = "1.8.2"
+version = "1.8.3"
 dependencies = [
  "bytes",
  "futures-core",
@@ -889,7 +889,7 @@ dependencies = [
 
 [[package]]
 name = "ws-proto-example-echo-proto"
-version = "1.8.2"
+version = "1.8.3"
 dependencies = [
  "bytes",
  "prost",
@@ -900,7 +900,7 @@ dependencies = [
 
 [[package]]
 name = "ws-proto-example-server"
-version = "1.8.2"
+version = "1.8.3"
 dependencies = [
  "bytes",
  "futures-util",
@@ -914,7 +914,7 @@ dependencies = [
 
 [[package]]
 name = "ws-proto-frame"
-version = "1.8.2"
+version = "1.8.3"
 dependencies = [
  "bytes",
  "prost",
