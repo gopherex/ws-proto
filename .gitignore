@@ -41,7 +41,3 @@ packages/protoc-gen-ws-es/test/gen/
 
 # JetBrains IDE
 .idea/
-
-# Rust (cargo workspace: crates/*, example/rust/*)
-/target/
-crates/protoc-gen-ws-rs/test/gen/

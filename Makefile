@@ -7,39 +7,27 @@ ROOT_MODULE := github.com/gopherex/ws-proto
 # path), which we don't support yet — keep releases on v0/v1.
 MAX_MAJOR := 1
 
-.PHONY: help gen build-gen build-gen-rs gen-example gen-rs-golden fmt test test-ts test-rs test-interop release
+.PHONY: help gen build-gen gen-example fmt test test-ts release
 
 help:
-	@echo "make gen          - regenerate transport/*.pb.go + crates/ws-proto-frame via easyp"
+	@echo "make gen          - regenerate transport/*.pb.go via easyp"
 	@echo "make build-gen    - build the protoc-gen-go-ws plugin into bin/"
-	@echo "make build-gen-rs - build the protoc-gen-ws-rs plugin (cargo, debug)"
 	@echo "make gen-example  - regenerate the golden example/"
-	@echo "make gen-rs-golden- regenerate crates/protoc-gen-ws-rs/test/gen (prost + ws-rs + prost-crate)"
 	@echo "make test         - gofmt check + go vet + go test ./..."
 	@echo "make test-ts      - build + test the npm workspaces"
-	@echo "make test-rs      - cargo fmt/clippy/test + build the generated golden crate"
-	@echo "make test-interop - cross-language matrix: Rust<->Go, Go->Rust, TS->Rust over real sockets"
 	@echo "make release      - interactive tag-driven release (Go module + npm packages share one version)"
 
 # --- codegen / build ---------------------------------------------------------
 
-# Needs protoc-gen-go (Go) and protoc-gen-prost + protoc-gen-prost-crate +
-# protoc-gen-tonic (`cargo install protoc-gen-prost protoc-gen-prost-crate
-# protoc-gen-tonic`) on PATH.
+# Needs protoc-gen-go on PATH.
 gen:
 	easyp generate
 
 build-gen:
 	go build -o bin/protoc-gen-go-ws ./cmd/protoc-gen-go-ws
 
-build-gen-rs:
-	cargo build -p protoc-gen-ws-rs
-
-gen-example: build-gen build-gen-rs
-	cd example && PATH="$(CURDIR)/bin:$(CURDIR)/target/debug:$$PATH" easyp generate
-
-gen-rs-golden: build-gen-rs
-	cd crates/protoc-gen-ws-rs && rm -rf test/gen && easyp generate
+gen-example: build-gen
+	cd example && PATH="$(CURDIR)/bin:$$PATH" easyp generate
 
 fmt:
 	gofmt -w .
@@ -56,31 +44,10 @@ test-ts:
 	npm run -ws build
 	npm run -ws test
 
-# Hand-written crates only: ws-proto-frame and example/rust/echo-proto are generated.
-RS_CRATES := -p ws-proto -p protoc-gen-ws-rs -p ws-proto-example-server
-
-test-rs: gen-rs-golden
-	cargo fmt $(RS_CRATES) -- --check
-	cargo clippy --workspace --all-targets --all-features -- -D warnings
-	cargo test --workspace --all-features
-	cargo build -p ws-proto --no-default-features
-	cd crates/protoc-gen-ws-rs/test/gen && cargo build
-
-# Cross-language matrix over real TCP WebSockets. `cargo test --workspace`
-# already covers Rust client -> Go server (example/rust/server/tests); this adds
-# the Go and TS clients against the Rust server binary.
-test-interop:
-	cargo build -p ws-proto-example-server
-	cargo test -p ws-proto-example-server --test interop
-	WS_PROTO_RUST_SERVER="$(CURDIR)/target/debug/ws-proto-example-server" go test ./example -run TestRustServer -v -count=1
-	WS_PROTO_IMPL=tonic WS_PROTO_RUST_SERVER="$(CURDIR)/target/debug/ws-proto-example-server" go test ./example -run TestRustServer -v -count=1
-	WS_PROTO_SERVER_BIN="$(CURDIR)/target/debug/ws-proto-example-server" npm run -w packages/protoc-gen-ws-es test -- integration
-
 # --- release -----------------------------------------------------------------
 # One version drives everything: the Go module is tagged vX.Y.Z, both npm
-# packages (@gopherex/ws-proto-transport, @gopherex/protoc-gen-ws-es) and the
-# cargo workspace ([workspace.package] version → all crates) are bumped to the
-# same X.Y.Z. Pushing the tag triggers .github/workflows/release.yml, which
+# packages (@gopherex/ws-proto-transport, @gopherex/protoc-gen-ws-es) are
+# bumped to the same X.Y.Z. Pushing the tag triggers .github/workflows/release.yml, which
 # builds the Go plugin binaries and publishes the npm packages to GitHub Packages.
 release:
 	@set -euo pipefail
@@ -104,11 +71,6 @@ release:
 
 	set_npm_version() { # $1 = version (without v); bumps both workspaces + lockfile
 	  npm version "$$1" --no-git-tag-version --workspaces >/dev/null
-	}
-	set_cargo_version() { # $1 = version; root [workspace.package] + intra-workspace path deps + template + lockfile
-	  sed -i -E "0,/^version = \"[0-9.]+\"/s//version = \"$$1\"/" Cargo.toml
-	  sed -i -E "s/(ws-proto-frame = \{ version = )\"[0-9.]+\"/\1\"$$1\"/" crates/*/Cargo.toml
-	  cargo update --workspace --offline >/dev/null
 	}
 
 	case "$$action" in
@@ -134,14 +96,12 @@ release:
 	  echo
 	  echo "Release v$$new — will:"
 	  echo "  - set npm version $$new in both packages (+ lockfile)"
-	  echo "  - set cargo workspace version $$new (+ Cargo.lock)"
 	  echo "  - commit 'release v$$new'"
 	  echo "  - create tag v$$new and push HEAD + tag (triggers CI release)"
 	  read -r -p "Type 'yes' to proceed: " ok
 	  [ "$$ok" = "yes" ] || { echo "Aborted."; exit 0; }
 
 	  set_npm_version "$$new"
-	  set_cargo_version "$$new"
 	  git add -A
 	  git diff --cached --quiet || git commit -m "release v$$new"
 	  git tag -a "v$$new" -m "v$$new"
