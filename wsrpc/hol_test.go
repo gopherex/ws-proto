@@ -15,7 +15,7 @@ import (
 
 // openServerStream drives an OPEN frame from the peer and returns the dispatched
 // server-side *Stream.
-func openServerStream(t *testing.T, ctx context.Context, peer *pipeConn, gotStream <-chan *Stream, id uint32, method string) *Stream {
+func openServerStream(t testing.TB, ctx context.Context, peer *pipeConn, gotStream <-chan *Stream, id uint32, method string) *Stream {
 	t.Helper()
 	require.NoError(t, peer.WriteFrame(ctx, &transport.Frame{StreamId: id, Kind: transport.Kind_KIND_OPEN, Method: method}))
 	select {

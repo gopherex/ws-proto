@@ -313,7 +313,16 @@ func (s *Stream) popRecv() *transport.Frame {
 // Recv waits for the next MSG and unmarshals into msg. Returns io.EOF on a
 // clean END, or the *Status as error on a non-OK END / RST.
 func (s *Stream) Recv(msg proto.Message) error {
-	b, err := s.RecvRaw()
+	return s.RecvContext(context.Background(), msg)
+}
+
+// RecvContext is Recv that also returns ctx.Err() when ctx ends: a receive
+// bounded by its own deadline, or a receiver its owner releases before
+// waiting for it (the stream itself ends only after the handler returns).
+// A buffered MSG is still delivered first; a receive that ends with ctx takes
+// nothing, so the stream is left as it was for the next receive.
+func (s *Stream) RecvContext(ctx context.Context, msg proto.Message) error {
+	b, err := s.RecvRawContext(ctx)
 	if err != nil {
 		return err
 	}
@@ -325,6 +334,12 @@ func (s *Stream) Recv(msg proto.Message) error {
 // as error on a non-OK END / RST. It exists for proxies that relay frames
 // without knowing the message types.
 func (s *Stream) RecvRaw() ([]byte, error) {
+	return s.RecvRawContext(context.Background())
+}
+
+// RecvRawContext is RecvRaw that also returns ctx.Err() when ctx ends, with
+// RecvContext's guarantees.
+func (s *Stream) RecvRawContext(ctx context.Context) ([]byte, error) {
 	for {
 		// Prefer any already-buffered MSG so terminal/half-close signals never
 		// preempt pending data (drain-first).
@@ -353,6 +368,9 @@ func (s *Stream) RecvRaw() ([]byte, error) {
 				return s.deliverPayload(f), nil
 			}
 			return nil, s.ctx.Err()
+		case <-ctx.Done():
+			// The caller's own bound: nothing popped, the stream is untouched.
+			return nil, ctx.Err()
 		}
 	}
 }

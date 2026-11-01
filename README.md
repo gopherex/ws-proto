@@ -389,6 +389,14 @@ kept its send side open. After buffered messages are drained, `Recv`/`RecvRaw`
 return `io.EOF` for OK or the final `*Status` for an error. The connection stays
 open for other RPCs; the client does not need to acknowledge END.
 
+`Stream.RecvContext(ctx, msg)` / `Stream.RecvRawContext(ctx)` also return
+`ctx.Err()` when their own context ends. Use them to bound one receive (a
+handshake deadline) or to release a receiver goroutine before the handler
+returns and waits for it: a plain `Recv` returns only once the stream ends,
+which is after the handler returns. A buffered message is still delivered
+first, and a receive that ends with its context takes nothing, so the next
+receive sees the stream as it was.
+
 ## Middleware & gRPC interceptors (Go)
 
 Two complementary mechanisms add cross-cutting behavior on the server.

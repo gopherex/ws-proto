@@ -68,7 +68,7 @@ func TestServerStreamRemovedAfterEnd(t *testing.T) {
 	}, time.Second, 10*time.Millisecond)
 }
 
-func mustMarshalString(t *testing.T, v string) []byte {
+func mustMarshalString(t testing.TB, v string) []byte {
 	t.Helper()
 	out, err := proto.Marshal(&wrapperspb.StringValue{Value: v})
 	require.NoError(t, err)
