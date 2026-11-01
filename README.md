@@ -518,6 +518,25 @@ if the server sent none) and the trailers with `stream.Trailer()` (populated
 once the stream ends). `SendHeader` after the first `Send` returns
 `codes.FailedPrecondition`.
 
+### Receiving with a deadline (Go)
+
+The generated server stream (`<Svc>_<Method>ServerWS`) has `Recv()` and
+`RecvContext(ctx)`, which also returns `ctx.Err()` when `ctx` ends
+(`wsrpc.Stream.RecvContext`): bound one receive, or release a reader goroutine
+before the handler waits for it and returns.
+
+```go
+func (impl) Bidi(ctx context.Context, s *pb.Svc_BidiServerWS) error {
+    first, cancel := context.WithTimeout(ctx, 5*time.Second)
+    defer cancel()
+    hello, err := s.RecvContext(first) // context.DeadlineExceeded: no handshake in time
+    // …
+}
+```
+
+The client ends a receive by cancelling the call's context, which ends the
+stream; client streams have no `RecvContext`.
+
 ### Reusing existing gRPC interceptors via the bridge
 
 When you serve an existing protoc-gen-go-grpc server through the bridge, you can

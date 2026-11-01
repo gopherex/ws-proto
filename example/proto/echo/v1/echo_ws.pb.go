@@ -38,6 +38,16 @@ func (x *EchoService_ServerStreamServerWS) Recv() (*ServerStreamRequest, error) 
 	return msg, nil
 }
 
+// RecvContext is Recv that also returns ctx.Err() when ctx ends; a buffered
+// request is delivered first, and an ended receive leaves the stream as it was.
+func (x *EchoService_ServerStreamServerWS) RecvContext(ctx context.Context) (*ServerStreamRequest, error) {
+	msg := new(ServerStreamRequest)
+	if err := x.stream.RecvContext(ctx, msg); err != nil {
+		return nil, err
+	}
+	return msg, nil
+}
+
 func (x *EchoService_ServerStreamServerWS) Context() context.Context {
 	return x.stream.Context()
 }
@@ -59,6 +69,16 @@ func (x *EchoService_ClientStreamServerWS) Recv() (*ClientStreamRequest, error) 
 	return msg, nil
 }
 
+// RecvContext is Recv that also returns ctx.Err() when ctx ends; a buffered
+// request is delivered first, and an ended receive leaves the stream as it was.
+func (x *EchoService_ClientStreamServerWS) RecvContext(ctx context.Context) (*ClientStreamRequest, error) {
+	msg := new(ClientStreamRequest)
+	if err := x.stream.RecvContext(ctx, msg); err != nil {
+		return nil, err
+	}
+	return msg, nil
+}
+
 func (x *EchoService_ClientStreamServerWS) Context() context.Context {
 	return x.stream.Context()
 }
@@ -75,6 +95,16 @@ func (x *EchoService_BidiServerWS) Send(msg *BidiResponse) error {
 func (x *EchoService_BidiServerWS) Recv() (*BidiRequest, error) {
 	msg := new(BidiRequest)
 	if err := x.stream.Recv(msg); err != nil {
+		return nil, err
+	}
+	return msg, nil
+}
+
+// RecvContext is Recv that also returns ctx.Err() when ctx ends; a buffered
+// request is delivered first, and an ended receive leaves the stream as it was.
+func (x *EchoService_BidiServerWS) RecvContext(ctx context.Context) (*BidiRequest, error) {
+	msg := new(BidiRequest)
+	if err := x.stream.RecvContext(ctx, msg); err != nil {
 		return nil, err
 	}
 	return msg, nil

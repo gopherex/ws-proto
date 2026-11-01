@@ -2,11 +2,13 @@ package example_test
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	echov1 "github.com/gopherex/ws-proto/example/proto/echo/v1"
 	"github.com/gopherex/ws-proto/wsrpc"
@@ -64,8 +66,13 @@ func (impl) Bidi(ctx context.Context, stream *echov1.EchoService_BidiServerWS) e
 
 func dial(t *testing.T) echov1.EchoServiceWSClient {
 	t.Helper()
+	return dialHandler(t, impl{})
+}
+
+func dialHandler(t *testing.T, h echov1.EchoServiceHandler) echov1.EchoServiceWSClient {
+	t.Helper()
 	srv := wsrpc.NewServer(wsrpc.WithInsecureSkipOriginCheck())
-	echov1.RegisterEchoServiceHandler(srv, impl{})
+	echov1.RegisterEchoServiceHandler(srv, h)
 
 	hs := httptest.NewServer(srv)
 	t.Cleanup(hs.Close)
@@ -123,6 +130,55 @@ func TestBidi(t *testing.T) {
 	require.NoError(t, stream.CloseSend())
 	_, err = stream.Recv()
 	require.Equal(t, io.EOF, err)
+}
+
+// handshake answers Bidi only when its first request comes within a deadline,
+// read with the generated RecvContext.
+type handshake struct{ impl }
+
+func (handshake) Bidi(ctx context.Context, stream *echov1.EchoService_BidiServerWS) error {
+	first, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
+	defer cancel()
+
+	req, err := stream.RecvContext(first)
+	if errors.Is(err, context.DeadlineExceeded) {
+		return status.Error(codes.DeadlineExceeded, "no handshake")
+	}
+	if err != nil {
+		return err
+	}
+	return stream.Send(&echov1.BidiResponse{Echo: "hello:" + req.Text})
+}
+
+func TestBidiRecvContext(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name string
+		send bool
+		want codes.Code
+	}{
+		{"handshake in time", true, codes.OK},
+		{"no handshake", false, codes.DeadlineExceeded},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			stream, err := dialHandler(t, handshake{}).Bidi(context.Background())
+			require.NoError(t, err)
+
+			if tc.send {
+				require.NoError(t, stream.Send(&echov1.BidiRequest{Text: "a"}))
+				r, err := stream.Recv()
+				require.NoError(t, err)
+				require.Equal(t, "hello:a", r.Echo)
+				return
+			}
+
+			_, err = stream.Recv()
+			require.Equal(t, tc.want, status.Code(err))
+		})
+	}
 }
 
 // grpcImpl implements the protoc-gen-go-grpc EchoServiceServer interface.

@@ -67,8 +67,21 @@ func (g *Generator) genServerStreamWrapper(gf *protogen.GeneratedFile, svc *prot
 	gf.P("}")
 	gf.P()
 
-	// Context passthrough.
 	ctx := gf.QualifiedGoIdent(contextImport.Ident("Context"))
+
+	// RecvContext: Recv that also returns when ctx ends (wsrpc.Stream.RecvContext).
+	gf.P("// RecvContext is Recv that also returns ctx.Err() when ctx ends; a buffered")
+	gf.P("// request is delivered first, and an ended receive leaves the stream as it was.")
+	gf.P("func (x *", name, ") RecvContext(ctx ", ctx, ") (*", req, ", error) {")
+	gf.P("\tmsg := new(", req, ")")
+	gf.P("\tif err := x.stream.RecvContext(ctx, msg); err != nil {")
+	gf.P("\t\treturn nil, err")
+	gf.P("\t}")
+	gf.P("\treturn msg, nil")
+	gf.P("}")
+	gf.P()
+
+	// Context passthrough.
 	gf.P("func (x *", name, ") Context() ", ctx, " {")
 	gf.P("\treturn x.stream.Context()")
 	gf.P("}")
