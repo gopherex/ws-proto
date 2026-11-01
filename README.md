@@ -336,6 +336,58 @@ intentional shutdown stays distinguishable from a transport disconnect.
 Without `WithReconnect` / `{ reconnect: true }` the behavior is unchanged: a
 dropped connection fails everything with `Unavailable` and stays down.
 
+#### Connection control (TS)
+
+`WsTransport` exposes its connection lifecycle and lets the app steer dialing,
+so no hand-written reconnect supervisor is needed:
+
+```ts
+const transport = new WsTransport("wss://api.example.com/rpc", {
+  reconnect: true,
+  backoff: { initialMs: 1_500, maxMs: 60_000, stableMs: 10_000 },
+  dialTimeoutMs: 10_000, // abort a WebSocket handshake that hangs
+  paused: true,          // don't dial until resume() (e.g. until signed in)
+});
+
+const unsubscribe = transport.subscribeState((s) => {
+  // s.phase: "paused" | "waiting" | "connecting" | "connected" | "disconnected" | "closed"
+  if (s.phase === "waiting") showRetryCountdown(s.retryAt); // epoch ms
+});
+
+transport.resume();   // signed in / app foregrounded / back online
+transport.pause();    // app backgrounded / offline / signed out
+transport.retryNow(); // user tapped "retry", or the network came back
+```
+
+| Phase | Meaning |
+|---|---|
+| `paused` | Dialing suspended and no socket is live; `resume()` dials. |
+| `waiting` | A redial is scheduled at `retryAt` (`Date.now()` clock). |
+| `connecting` | A socket is in its WebSocket handshake. |
+| `connected` | The socket is open and carrying frames. |
+| `disconnected` | The connection died and no redial is scheduled (`reconnect` off, or a permanent failure such as a subprotocol mismatch); `error` holds the cause. |
+| `closed` | `close()` was called; terminal. |
+
+- `subscribeState(fn)` calls `fn` with the current state at once and on every
+  change; `transport.state` reads it synchronously. A throwing listener is
+  isolated (its error is rethrown asynchronously).
+- `pause()` cancels a scheduled redial and aborts a dial still in its handshake
+  (its buffered calls fail with `CODE_UNAVAILABLE`). An **open socket is left
+  alone**; when it later drops, the transport parks in `paused`. While no socket
+  exists, calls fail fast with `CODE_UNAVAILABLE`.
+- `resume()` resets the backoff and, with no live socket, dials at once.
+- `retryNow()` dials immediately from `waiting` or `disconnected`; it is a no-op
+  while paused, connecting, connected or closed.
+- `backoff.stableMs` (default `0`): the attempt counter resets only after a
+  connection stayed open this long, so a peer that accepts and drops at once (a
+  proxy with no live backend) keeps backing off instead of being hammered. With
+  `0` every successful open resets it.
+- `dialTimeoutMs` (default unset): a socket not open within this time is
+  aborted; its calls fail with `CODE_UNAVAILABLE` "dial timeout" and, with
+  `reconnect`, a redial is scheduled. It applies to every dial.
+- `fromSocket()` transports report their state too but ignore `pause()`,
+  `resume()` and `retryNow()`: they do not own dialing.
+
 ### Stream teardown contract (TS transport)
 
 The TypeScript transport guarantees the following on **every** terminal stream

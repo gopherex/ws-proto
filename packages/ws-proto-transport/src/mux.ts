@@ -84,6 +84,30 @@ const NOOP_HOOKS: StreamHooks = {
 export const SUBPROTOCOL = "wsrpc.v1";
 
 /**
+ * MuxLifecycle lets the owner (WsTransport) observe the socket. `open` fires
+ * once the socket opened with the right subprotocol. `drop` fires at most once
+ * when the connection dies by itself (never for close()): `redial` is true for
+ * a transport loss worth redialing, false for a permanent failure that would
+ * just recur (subprotocol mismatch, oversize inbound frame, pre-open overflow).
+ */
+export interface MuxLifecycle {
+  open(): void;
+  drop(err: WsStatusError, redial: boolean): void;
+}
+
+/** failedStream returns a stream already ended with `err`; it never touches a socket. */
+export function failedStream(
+  id: number,
+  err: WsStatusError,
+  initialWindow?: number,
+  maxSendBuffer?: number,
+): StreamImpl {
+  const stream = new StreamImpl(id, NOOP_HOOKS, initialWindow, maxSendBuffer);
+  stream.endError(err);
+  return stream;
+}
+
+/**
  * Mux owns one WebSocketLike and multiplexes many streams over it. Client only:
  * it allocates monotonic ODD stream ids (1, 3, 5, ...) and never reacts to OPEN.
  */
@@ -114,8 +138,8 @@ export class Mux {
   private dead = false;
   /** The error that killed this mux; reused to fail late openStream() calls. */
   private terminalError?: WsStatusError;
-  /** Fired once when the socket drops (not via close()); used to drive reconnect. */
-  private onDisconnect?: () => void;
+  /** Owner hooks; drop is cleared after it fires so it fires at most once. */
+  private lifecycle?: MuxLifecycle;
 
   constructor(
     ws: WebSocketLike,
@@ -140,11 +164,12 @@ export class Mux {
     }
 
     this.ws.onopen = () => {
-      if (!this.validateProtocol()) {
+      if (this.closed || this.dead || !this.validateProtocol()) {
         return;
       }
       this.open = true;
       this.flush();
+      this.lifecycle?.open();
     };
     this.ws.onmessage = (ev) => this.handleMessage(ev.data);
     // A socket close/error that is NOT a deliberate close() is a transport
@@ -154,9 +179,14 @@ export class Mux {
     this.ws.onerror = () => this.onTransportDrop();
   }
 
-  /** setOnDisconnect registers a one-shot callback fired when the socket drops. */
-  setOnDisconnect(fn: () => void): void {
-    this.onDisconnect = fn;
+  /** setLifecycle registers the owner's open/drop hooks. */
+  setLifecycle(lifecycle: MuxLifecycle): void {
+    this.lifecycle = lifecycle;
+  }
+
+  /** isOpen reports whether the socket is open and carrying frames. */
+  get isOpen(): boolean {
+    return this.open && !this.closed && !this.dead;
   }
 
   /**
@@ -170,18 +200,14 @@ export class Mux {
   private validateProtocol(): boolean {
     const p = this.ws.protocol;
     if (p !== undefined && p !== SUBPROTOCOL) {
-      this.closed = true; // terminal: suppress reconnect and further sends
-      this.markDefunct(
+      this.fail(
         new WsStatusError(
           CODE_UNAVAILABLE,
           `server did not negotiate subprotocol "${SUBPROTOCOL}" (got "${p}")`,
         ),
+        1002,
+        "subprotocol not negotiated",
       );
-      try {
-        this.ws.close(1002, "subprotocol not negotiated");
-      } catch {
-        // closing an already-closed socket is fine
-      }
       return false;
     }
     return true;
@@ -205,10 +231,31 @@ export class Mux {
       return; // deliberate close / earlier drop already failed the streams
     }
     this.dead = true;
-    this.markDefunct(new WsStatusError(CODE_UNAVAILABLE, "connection lost"));
-    const fn = this.onDisconnect;
-    this.onDisconnect = undefined; // fire at most once
-    fn?.();
+    const err = new WsStatusError(CODE_UNAVAILABLE, "connection lost");
+    this.markDefunct(err);
+    this.notifyDrop(err, true);
+  }
+
+  /**
+   * fail permanently kills the connection from inside the mux (a failure that
+   * redialing would only repeat): terminal state, socket closed with `code`,
+   * owner told not to redial.
+   */
+  private fail(err: WsStatusError, code: number, reason: string): void {
+    this.closed = true; // terminal: suppress further sends and socket events
+    this.markDefunct(err);
+    try {
+      this.ws.close(code, reason);
+    } catch {
+      // closing an already-closed socket is fine
+    }
+    this.notifyDrop(err, false);
+  }
+
+  private notifyDrop(err: WsStatusError, redial: boolean): void {
+    const lifecycle = this.lifecycle;
+    this.lifecycle = undefined; // fire at most once
+    lifecycle?.drop(err, redial);
   }
 
   /** openStream allocates an odd stream id, registers the stream, and sends OPEN. */
@@ -220,11 +267,12 @@ export class Mux {
       // A defunct mux can never carry a new RPC. Decide the call's fate NOW:
       // fail it fast with the terminal cause (the caller's retry loop redials)
       // instead of buffering frames toward a socket that is gone forever.
-      const stream = new StreamImpl(id, NOOP_HOOKS, this.initialWindow, this.maxSendBuffer);
-      stream.endError(
+      return failedStream(
+        id,
         this.terminalError ?? new WsStatusError(CODE_UNAVAILABLE, "connection lost"),
+        this.initialWindow,
+        this.maxSendBuffer,
       );
-      return stream;
     }
 
     const stream = new StreamImpl(
@@ -296,13 +344,11 @@ export class Mux {
     // Pre-open backlog: bound it so a producer that keeps sending while the
     // socket never opens fails the connection instead of growing without limit.
     if (this.sendBufferBytes + bytes.length > MAX_PREOPEN_BUFFER_BYTES) {
-      this.closed = true;
-      this.markDefunct(new WsStatusError(CODE_UNAVAILABLE, "send buffer overflow before connect"));
-      try {
-        this.ws.close(1011, "send buffer overflow");
-      } catch {
-        // closing an already-closed socket is fine
-      }
+      this.fail(
+        new WsStatusError(CODE_UNAVAILABLE, "send buffer overflow before connect"),
+        1011,
+        "send buffer overflow",
+      );
       return;
     }
     this.sendBuffer.push(bytes);
@@ -329,13 +375,11 @@ export class Mux {
     // Optional inbound size cap: the browser WebSocket has no built-in limit, so
     // reject an over-large message before decoding it and fail the connection.
     if (this.maxFrameBytes > 0 && bytes.length > this.maxFrameBytes) {
-      this.closed = true;
-      this.failAll(new WsStatusError(CODE_RESOURCE_EXHAUSTED, "inbound frame exceeds maxFrameBytes"));
-      try {
-        this.ws.close(1009, "message too big");
-      } catch {
-        // closing an already-closed socket is fine
-      }
+      this.fail(
+        new WsStatusError(CODE_RESOURCE_EXHAUSTED, "inbound frame exceeds maxFrameBytes"),
+        1009,
+        "message too big",
+      );
       return;
     }
     let frame: ReturnType<typeof decodeFrame>;
@@ -435,13 +479,17 @@ export class Mux {
     }
   }
 
-  /** close tears down all streams and the socket. */
-  close(): void {
+  /**
+   * close deliberately tears down all streams and the socket; streams fail with
+   * `err` (default CODE_CANCELLED "transport closed"). The owner is not notified.
+   */
+  close(err: WsStatusError = new WsStatusError(CODE_CANCELLED, "transport closed")): void {
     if (this.closed) {
       return;
     }
     this.closed = true;
-    this.markDefunct(new WsStatusError(CODE_CANCELLED, "transport closed"));
+    this.lifecycle = undefined;
+    this.markDefunct(err);
     try {
       this.ws.close(1000, "");
     } catch {
