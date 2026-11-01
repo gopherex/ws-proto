@@ -1,0 +1,20 @@
+version: v1
+generate:
+    paths:
+        - proto
+plugins:
+    - name: go
+      out: .
+      opts:
+        paths:
+            - source_relative
+    - name: go-grpc
+      out: .
+      opts:
+        paths:
+            - source_relative
+    - name: go-ws
+      out: .
+      opts:
+        paths:
+            - source_relative

@@ -1,0 +1,10 @@
+version: v1
+generate:
+    paths:
+        - transport
+plugins:
+    - name: go
+      out: .
+      opts:
+        paths:
+            - source_relative

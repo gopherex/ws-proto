@@ -1,18 +1,24 @@
-lint:
-  use:
-    - DEFAULT
-  enum_zero_value_suffix: _UNSPECIFIED
-  service_suffix: API
-  ignore: []
-  except:
-    - PACKAGE_VERSION_SUFFIX
-  allow_comment_ignores: false
-deps:
-generate:
-  inputs:
-    - directory: transport
-  plugins:
-    - name: go
-      out: .
-      opts:
-        paths: source_relative
+version: v1
+linters:
+    default: MINIMAL
+    enable:
+        - ENUM_VALUE_PREFIX
+        - ENUM_ZERO_VALUE_SUFFIX
+        - FILE_LOWER_SNAKE_CASE
+        - RPC_REQUEST_RESPONSE_UNIQUE
+        - RPC_REQUEST_STANDARD_NAME
+        - RPC_RESPONSE_STANDARD_NAME
+        - SERVICE_SUFFIX
+    disable:
+        - DIRECTORY_SAME_PACKAGE
+        - PACKAGE_DEFINED
+        - PACKAGE_DIRECTORY_MATCH
+        - PACKAGE_SAME_DIRECTORY
+    allow_comment_ignores: false
+linters-settings:
+    ENUM_ZERO_VALUE_SUFFIX:
+        suffix: _UNSPECIFIED
+    SERVICE_SUFFIX:
+        suffix: API
+issues: {}
+breaking: {}
