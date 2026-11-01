@@ -135,17 +135,22 @@ No proto options are required; routes derive from `/pkg.Service/Method`.
 
 ### Go (protoc-gen-go + protoc-gen-go-grpc + protoc-gen-go-ws)
 
-Using [`easyp`](https://github.com/easyp-tech/easyp) (see `easyp.yaml`):
+Using [`easyp`](https://github.com/easyp-tech/easyp) v1 (see `example/easyp.gen.yaml`):
 
 ```yaml
+# easyp.gen.yaml
+version: v1
 generate:
-  inputs:
-    - directory: proto
-  plugins:
-    - { name: go,      out: gen, opts: { paths: source_relative } }
-    - { name: go-grpc, out: gen, opts: { paths: source_relative } }   # only if you use the gRPC bridge
-    - { name: go-ws,   out: gen, opts: { paths: source_relative } }
+  paths:
+    - proto
+plugins:
+  - { name: go,      out: gen, opts: { paths: [source_relative] } }
+  - { name: go-grpc, out: gen, opts: { paths: [source_relative] } }   # only if you use the gRPC bridge
+  - { name: go-ws,   out: gen, opts: { paths: [source_relative] } }
 ```
+
+The module is declared in `protobuf.mod`; `easyp migrate` converts a v0
+`easyp.yaml`.
 
 ```bash
 easyp generate   # emits *.pb.go, *_grpc.pb.go, *_ws.pb.go
