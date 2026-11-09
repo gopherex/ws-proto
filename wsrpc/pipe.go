@@ -57,7 +57,14 @@ func (p *pipeConn) WriteFrame(ctx context.Context, f *transport.Frame) error {
 	}
 }
 
+// ReadFrame returns frames written before Close ahead of the close itself, as
+// a socket delivers what it received before the FIN.
 func (p *pipeConn) ReadFrame(ctx context.Context) (*transport.Frame, error) {
+	select {
+	case f := <-p.in:
+		return f, nil
+	default:
+	}
 	select {
 	case f := <-p.in:
 		return f, nil

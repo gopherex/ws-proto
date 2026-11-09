@@ -2,9 +2,36 @@ package wsrpc
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
+
+	"github.com/gopherex/ws-proto/transport"
 )
+
+// Frames written before Close are read before the close is reported, every
+// time: the read must not pick the close over a queued frame.
+func TestPipeDeliversQueuedFramesBeforeClose(t *testing.T) {
+	t.Parallel()
+	for range 200 {
+		a, b := NewPipe()
+		for id := range uint32(3) {
+			if err := a.WriteFrame(t.Context(), &transport.Frame{StreamId: id}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		_ = a.Close()
+		for id := range uint32(3) {
+			f, err := b.ReadFrame(t.Context())
+			if err != nil || f.GetStreamId() != id {
+				t.Fatalf("frame %d: got %v, %v", id, f, err)
+			}
+		}
+		if _, err := b.ReadFrame(t.Context()); !errors.Is(err, errPipeClosed) {
+			t.Fatalf("after the queued frames: %v, want errPipeClosed", err)
+		}
+	}
+}
 
 // Both ends close at once, repeatedly, through the pipe and through the
 // muxes and client over it: no end panics on an already closed pipe.
