@@ -342,8 +342,10 @@ dropped connection fails everything with `Unavailable` and stays down.
 
 When the server must drop a client and tell it why (session revoked from
 another device, sign-out, rotated token), end the connection through its
-`ServerConn` handle instead of cancelling a context — a cancelled connection
-closes the socket before any status reaches the client:
+`ServerConn` handle instead of cancelling a context. Cancelling the context
+returned by `WithConnContext` (or `ServeConn`'s) is a plain shutdown: the socket
+closes with code 1000 and in-flight calls fail with `Unavailable` ("connection
+lost"), with no reason attached:
 
 ```go
 srv := wsrpc.NewServer(wsrpc.WithSameOriginOnly(),

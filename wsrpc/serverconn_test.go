@@ -175,8 +175,70 @@ func TestCloseWithStatusFromHandlerOverServeConn(t *testing.T) {
 
 	requireRevoked(t, hang.Recv(&wrapperspb.StringValue{}))
 	requireRevoked(t, end.Recv(&wrapperspb.StringValue{}))
-	_, err = cc.NewStream(ctx, "/t/Hang", nil)
+	// A later call fails with the status: at NewStream once CONN_END is
+	// processed, or on its first Recv if it raced ahead of that frame.
+	after, err := cc.NewStream(ctx, "/t/Hang", nil)
+	if err == nil {
+		err = after.Recv(&wrapperspb.StringValue{})
+	}
 	requireRevoked(t, err)
+}
+
+// Cancelling the connection context closes the WebSocket with a close frame
+// (1000), not by dropping TCP, which a browser reports as 1006.
+func TestConnContextCancelClosesNormally(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cancels := make(chan context.CancelFunc, 1)
+	srv := NewServer(WithInsecureSkipOriginCheck(), WithKeepalive(0, 0),
+		WithConnContext(func(ctx context.Context, _ *http.Request) context.Context {
+			ctx, cancel := context.WithCancel(ctx)
+			cancels <- cancel
+			return ctx
+		}))
+	hs := httptest.NewServer(srv)
+	t.Cleanup(hs.Close)
+
+	c, _, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(hs.URL, "http"), &websocket.DialOptions{Subprotocols: []string{Subprotocol}})
+	require.NoError(t, err)
+	defer c.CloseNow()
+	(<-cancels)()
+	_, _, err = c.Read(ctx)
+	require.Equal(t, websocket.StatusNormalClosure, websocket.CloseStatus(err), "close: %v", err)
+}
+
+// Cancelling ServeConn's context closes the conn, so a client with its own
+// context learns the connection is gone instead of hanging.
+func TestServeConnCancelReachesClient(t *testing.T) {
+	t.Parallel()
+	started := make(chan struct{})
+	srv := NewServer()
+	srv.Register("/t/Hang", func(ctx context.Context, _ *Stream) error {
+		close(started)
+		<-ctx.Done()
+		return ctx.Err()
+	})
+	srvEnd, cliEnd := NewPipe()
+	srvCtx, stop := context.WithCancel(context.Background())
+	served := make(chan struct{})
+	go func() { srv.ServeConn(srvCtx, srvEnd); close(served) }()
+	cc, err := DialConn(t.Context(), cliEnd)
+	require.NoError(t, err)
+	s, err := cc.NewStream(t.Context(), "/t/Hang", nil)
+	require.NoError(t, err)
+	<-started
+
+	stop()
+	recvd := make(chan error, 1)
+	go func() { recvd <- s.Recv(&wrapperspb.StringValue{}) }()
+	select {
+	case err := <-recvd:
+		require.Equal(t, codes.Unavailable, FromError(err).Code, "recv: %v", err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("client did not learn the connection ended")
+	}
+	<-served
 }
 
 // An OPEN that races the close is refused with the connection's status.

@@ -154,6 +154,8 @@ func WithMaxConcurrentStreams(n int) ServerOption {
 
 // WithConnContext lets handlers read the Upgrade HTTP request (auth headers, X-Forwarded-For)
 // by deriving the per-connection base context; values are visible via Stream.Context().
+// Cancelling the returned context closes the connection (WebSocket code 1000); to
+// tell the client why, use ServerConn.CloseWithStatus instead.
 func WithConnContext(fn func(ctx context.Context, r *http.Request) context.Context) ServerOption {
 	return func(c *serverConfig) { c.connContext = fn }
 }

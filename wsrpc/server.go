@@ -82,28 +82,45 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	mux := s.newServerMux(base, conn)
 	_ = sc.attach(mux) // a failed write shows up as the closed connection below
 	mux.startKeepalive(s.cfg.keepalive, s.cfg.keepaliveTimeout)
-	select {
-	case <-mux.ctx.Done():
-		if err := c.Close(websocket.StatusNormalClosure, ""); err != nil {
+	awaitEnd(base, mux, sc, func(st *Status) {
+		code, reason := websocket.StatusNormalClosure, ""
+		if st != nil {
+			code, reason = websocket.StatusPolicyViolation, closeReason(st.Message)
+		}
+		if err := c.Close(code, reason); err != nil {
 			_ = c.CloseNow()
 		}
-	case <-sc.ended:
-		// Close before the mux shuts down: cancelling the read loop's context
-		// makes the websocket library drop the TCP connection without the
-		// close frame that carries the code to the client.
-		if err := c.Close(websocket.StatusPolicyViolation, closeReason(mux.endStatus().Message)); err != nil {
-			_ = c.CloseNow()
-		}
-		<-mux.ctx.Done()
-	}
+	})
 }
 
 // newServerMux builds the per-connection server mux that dispatches streams to
 // registered handlers (with middleware and the max-streams cap applied). Shared
-// by ServeHTTP (WebSocket) and ServeConn (in-memory).
+// by ServeHTTP (WebSocket) and ServeConn (in-memory). The mux keeps ctx's values
+// but not its cancellation: awaitEnd turns that into a closed connection, and
+// the mux ends when its read loop sees the close.
 func (s *Server) newServerMux(ctx context.Context, conn FrameConn) *Mux {
-	return newMuxConfig(ctx, conn, func(stream *Stream) { go s.serveStream(stream) },
+	return newMuxConfig(context.WithoutCancel(ctx), conn, func(stream *Stream) { go s.serveStream(stream) },
 		s.cfg.receiveBuffer, s.cfg.initialWindow, s.cfg.maxStreams, s.cfg.stats)
+}
+
+// awaitEnd blocks until the connection is over, closing it through closeConn
+// when the server ends it: on ctx cancellation (st nil) or CloseWithStatus (st
+// set). The close comes first and the mux ends after, when its read loop sees
+// it: cancelling the read instead would make the websocket library drop TCP
+// without the close frame (the client sees 1006, not the code), and the
+// client of a pipe would never learn the connection ended. A mux that ended by
+// itself (peer gone, keepalive failure) gets a best-effort close.
+func awaitEnd(ctx context.Context, mux *Mux, sc *ServerConn, closeConn func(st *Status)) {
+	select {
+	case <-mux.ctx.Done():
+		closeConn(nil)
+		return
+	case <-ctx.Done():
+		closeConn(nil)
+	case <-sc.ended:
+		closeConn(mux.endStatus())
+	}
+	<-mux.ctx.Done()
 }
 
 // ServeConn serves a single connection over an existing FrameConn — the
@@ -115,9 +132,10 @@ func (s *Server) newServerMux(ctx context.Context, conn FrameConn) *Mux {
 //
 // Handlers reach the connection's ServerConn through ServerConnFromContext.
 //
-// ServeConn blocks until ctx is canceled, conn is closed by the peer, or the
-// connection is ended with ServerConn.CloseWithStatus (which closes conn). Pair it
-// with NewPipe and DialConn to run a server and client in one process:
+// ServeConn blocks until the connection is over: the peer closed conn, or the
+// server ended it by cancelling ctx or with ServerConn.CloseWithStatus — both
+// close conn, so the client learns it. Pair it with NewPipe and DialConn to run
+// a server and client in one process:
 //
 //	srvEnd, cliEnd := wsrpc.NewPipe()
 //	go srv.ServeConn(ctx, srvEnd)
@@ -128,13 +146,7 @@ func (s *Server) ServeConn(ctx context.Context, conn FrameConn) {
 	defer s.cfg.stats.connClosed(ctx)
 	mux := s.newServerMux(ctx, conn)
 	_ = sc.attach(mux) // a failed write shows up as the closed connection below
-	select {
-	case <-mux.ctx.Done():
-	case <-sc.ended:
-		// The client's read loop finishes after the status frames.
-		_ = conn.Close()
-		<-mux.ctx.Done()
-	}
+	awaitEnd(ctx, mux, sc, func(*Status) { _ = conn.Close() })
 }
 
 func (s *Server) serveStream(stream *Stream) {
