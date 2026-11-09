@@ -10,7 +10,7 @@ message Frame {
   Kind kind = 2;
   map<string, string> headers = 3;  // OPEN: metadata + deadline; END: trailers
   bytes payload = 4;                // MSG: one marshaled request/response message
-  Status status = 5;                // END only
+  Status status = 5;                // END, RST, CONN_END
   string method = 6;                // OPEN only: "/pkg.Service/Method"
   uint32 window = 8;                // WINDOW_UPDATE only: credit delta in bytes returned to the sender for stream_id
 }
@@ -24,6 +24,11 @@ enum Kind {
   KIND_RST = 5;
   KIND_HEADER = 6;                  // server->client only: leading response metadata, at most once before any MSG
   KIND_WINDOW_UPDATE = 7;           // flow control: returns credit (window delta bytes) to the sender for stream_id
+  // server->client only, stream_id 0: the server ends the whole connection with
+  // status. The client fails every stream with it and does not reconnect. Sent
+  // after the END of every live stream, so a client ignoring it still gets the
+  // status on its streams.
+  KIND_CONN_END = 8;
 }
 
 message Status {

@@ -88,7 +88,8 @@ export const SUBPROTOCOL = "wsrpc.v1";
  * once the socket opened with the right subprotocol. `drop` fires at most once
  * when the connection dies by itself (never for close()): `redial` is true for
  * a transport loss worth redialing, false for a permanent failure that would
- * just recur (subprotocol mismatch, oversize inbound frame, pre-open overflow).
+ * just recur (subprotocol mismatch, oversize inbound frame, pre-open overflow,
+ * the server ending the connection with KIND_CONN_END).
  */
 export interface MuxLifecycle {
   open(): void;
@@ -463,6 +464,20 @@ export class Mux {
           statusErrorFromProto(frame.status) ??
           new WsStatusError(CODE_CANCELLED, frame.status?.message || "stream reset");
         s.endError(err, frame.headers);
+        return;
+      }
+
+      case Kind.KIND_CONN_END: {
+        // The server ended the whole connection with a status: every stream and
+        // every later call fails with it, and the owner must not redial — the
+        // server would refuse the same way.
+        if (frame.streamId !== 0) {
+          return;
+        }
+        const err =
+          statusErrorFromProto(frame.status) ??
+          new WsStatusError(CODE_UNAVAILABLE, "connection ended by server");
+        this.fail(err, 1000, "");
         return;
       }
 

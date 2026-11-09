@@ -27,10 +27,10 @@ v2 output (it imports the generated `*_pb.ts` message types and schemas).
   ```proto
   message Frame {
     uint32 stream_id = 1;             // client-allocated, monotonic odd ids
-    Kind   kind      = 2;             // OPEN | MSG | HALF_CLOSE | END | RST | HEADER | WINDOW_UPDATE
+    Kind   kind      = 2;             // OPEN | MSG | HALF_CLOSE | END | RST | HEADER | WINDOW_UPDATE | CONN_END
     map<string,string> headers = 3;   // OPEN: metadata + deadline; END: trailers
     bytes  payload   = 4;             // MSG: one marshaled request/response message
-    Status status    = 5;             // END only: gRPC-style code/message/details
+    Status status    = 5;             // END, RST, CONN_END: gRPC-style code/message/details
     string method    = 6;             // OPEN only: "/pkg.Service/Method"
     uint32 window    = 8;             // WINDOW_UPDATE only: credit delta (bytes) returned to the sender
   }
@@ -38,6 +38,8 @@ v2 output (it imports the generated `*_pb.ts` message types and schemas).
 
 - Streams are **client-initiated**, one stream per RPC. Flow:
   `OPEN → MSG* → HALF_CLOSE → MSG* → END(status)`; `RST` aborts either side.
+  The server may end the whole connection with a status: `CONN_END` on stream
+  0 (see [Ending a connection with a reason](#ending-a-connection-with-a-reason)).
 - The handshake negotiates the `Sec-WebSocket-Protocol` subprotocol **`wsrpc.v1`**.
 - Per-RPC metadata and deadlines ride **in-band** on the `OPEN` frame.
   Connection-level concerns (auth, tenant routing) ride the **HTTP Upgrade
@@ -336,6 +338,43 @@ intentional shutdown stays distinguishable from a transport disconnect.
 Without `WithReconnect` / `{ reconnect: true }` the behavior is unchanged: a
 dropped connection fails everything with `Unavailable` and stays down.
 
+### Ending a connection with a reason
+
+When the server must drop a client and tell it why (session revoked from
+another device, sign-out, rotated token), end the connection through its
+`ServerConn` handle instead of cancelling a context — a cancelled connection
+closes the socket before any status reaches the client:
+
+```go
+srv := wsrpc.NewServer(wsrpc.WithSameOriginOnly(),
+    wsrpc.WithConnContext(func(ctx context.Context, r *http.Request) context.Context {
+        sc, _ := wsrpc.ServerConnFromContext(ctx) // also reachable from every stream context
+        sessions.Track(r, sc)
+        return ctx
+    }))
+
+// Later, from any goroutine:
+st := &wsrpc.Status{Code: codes.Unauthenticated, Message: "session ended", Details: details}
+err := sc.CloseWithStatus(ctx, st)
+```
+
+`CloseWithStatus` writes, in order on the one socket:
+
+1. `END(st)` on every live stream — handlers see their context cancelled, and a
+   status they return afterwards is not sent;
+2. `CONN_END(st)` on stream 0 — the connection-level status;
+3. a WebSocket close with code **1008** (policy violation) and the message as
+   reason (cut to 123 bytes).
+
+The client fails every stream and every later call with `st` (code, message,
+details) and **does not reconnect**: Go `NewStream` returns `st`; the TS
+transport moves to `disconnected` with `error` set to `st`, so an app learns
+the reason even with no RPC in flight. A client from before `CONN_END` ignores
+that frame and still receives `st` on each live stream. An OPEN that races the
+close is refused with `RST(st)`. A non-OK `st` is required; calls after the
+first do nothing; `ctx` bounds the writes and may be a handler's own stream
+context.
+
 #### Connection control (TS)
 
 `WsTransport` exposes its connection lifecycle and lets the app steer dialing,
@@ -365,7 +404,7 @@ transport.retryNow(); // user tapped "retry", or the network came back
 | `waiting` | A redial is scheduled at `retryAt` (`Date.now()` clock). |
 | `connecting` | A socket is in its WebSocket handshake. |
 | `connected` | The socket is open and carrying frames. |
-| `disconnected` | The connection died and no redial is scheduled (`reconnect` off, or a permanent failure such as a subprotocol mismatch); `error` holds the cause. |
+| `disconnected` | The connection died and no redial is scheduled (`reconnect` off, or a permanent failure such as a subprotocol mismatch or the server [ending the connection with a status](#ending-a-connection-with-a-reason)); `error` holds the cause. |
 | `closed` | `close()` was called; terminal. |
 
 - `subscribeState(fn)` calls `fn` with the current state at once and on every

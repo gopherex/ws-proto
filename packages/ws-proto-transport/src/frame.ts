@@ -21,6 +21,7 @@ export const Kind = {
   KIND_RST: GenKind.RST,
   KIND_HEADER: GenKind.HEADER,
   KIND_WINDOW_UPDATE: GenKind.WINDOW_UPDATE,
+  KIND_CONN_END: GenKind.CONN_END,
 } as const;
 
 export type Kind = (typeof Kind)[keyof typeof Kind];

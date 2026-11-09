@@ -72,7 +72,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.cfg.stats.connRejected(r.Context(), statsReasonUpgrade)
 		return
 	}
-	base := r.Context()
+	base, sc := withServerConn(r.Context())
 	if s.cfg.connContext != nil {
 		base = s.cfg.connContext(base, r)
 	}
@@ -80,10 +80,21 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer s.cfg.stats.connClosed(base)
 	conn := newWSConn(c, s.cfg.readLimit)
 	mux := s.newServerMux(base, conn)
+	_ = sc.attach(mux) // a failed write shows up as the closed connection below
 	mux.startKeepalive(s.cfg.keepalive, s.cfg.keepaliveTimeout)
-	<-mux.ctx.Done()
-	if err := c.Close(websocket.StatusNormalClosure, ""); err != nil {
-		_ = c.CloseNow()
+	select {
+	case <-mux.ctx.Done():
+		if err := c.Close(websocket.StatusNormalClosure, ""); err != nil {
+			_ = c.CloseNow()
+		}
+	case <-sc.ended:
+		// Close before the mux shuts down: cancelling the read loop's context
+		// makes the websocket library drop the TCP connection without the
+		// close frame that carries the code to the client.
+		if err := c.Close(websocket.StatusPolicyViolation, closeReason(mux.endStatus().Message)); err != nil {
+			_ = c.CloseNow()
+		}
+		<-mux.ctx.Done()
 	}
 }
 
@@ -102,17 +113,28 @@ func (s *Server) newServerMux(ctx context.Context, conn FrameConn) *Mux {
 // that have no meaning on a handed-off in-process channel. Keepalive pings are
 // skipped too — there is no proxy idle timeout to outlast.
 //
-// ServeConn blocks until ctx is canceled or conn is closed by the peer. Pair it
+// Handlers reach the connection's ServerConn through ServerConnFromContext.
+//
+// ServeConn blocks until ctx is canceled, conn is closed by the peer, or the
+// connection is ended with ServerConn.CloseWithStatus (which closes conn). Pair it
 // with NewPipe and DialConn to run a server and client in one process:
 //
 //	srvEnd, cliEnd := wsrpc.NewPipe()
 //	go srv.ServeConn(ctx, srvEnd)
 //	cc, _ := wsrpc.DialConn(ctx, cliEnd)
 func (s *Server) ServeConn(ctx context.Context, conn FrameConn) {
+	ctx, sc := withServerConn(ctx)
 	s.cfg.stats.connOpened(ctx)
 	defer s.cfg.stats.connClosed(ctx)
 	mux := s.newServerMux(ctx, conn)
-	<-mux.ctx.Done()
+	_ = sc.attach(mux) // a failed write shows up as the closed connection below
+	select {
+	case <-mux.ctx.Done():
+	case <-sc.ended:
+		// The client's read loop finishes after the status frames.
+		_ = conn.Close()
+		<-mux.ctx.Done()
+	}
 }
 
 func (s *Server) serveStream(stream *Stream) {

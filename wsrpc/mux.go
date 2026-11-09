@@ -2,6 +2,9 @@ package wsrpc
 
 import (
 	"context"
+	"errors"
+	"maps"
+	"slices"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -26,6 +29,10 @@ type Mux struct {
 
 	mu      sync.Mutex
 	streams map[uint32]*Stream
+	// ending is the status the connection ends with (guarded by mu): set on
+	// the server by closeWithStatus, on the client by a KIND_CONN_END frame.
+	// Once set, no stream opens and every stream fails with it.
+	ending *Status
 
 	onOpen func(*Stream) // server-side dispatch; nil on client
 
@@ -165,6 +172,10 @@ func (m *Mux) newClientStream(ctx context.Context, method string, headers map[st
 	id := atomic.AddUint32(&m.nextID, 2) - 2 // 1,3,5,...
 	s := newStream(ctx, m, id, method, m.initialWindow)
 	m.mu.Lock()
+	if st := m.ending; st != nil {
+		m.mu.Unlock()
+		return nil, st
+	}
 	m.streams[id] = s
 	m.mu.Unlock()
 	if err := m.write(ctx, &transport.Frame{
@@ -203,6 +214,9 @@ func (m *Mux) readLoop() {
 // disconnect and surfaces codes.Unavailable ("wsrpc: connection lost"), which
 // callers are expected to retry.
 func (m *Mux) disconnectErr() error {
+	if st := m.endStatus(); st != nil {
+		return st
+	}
 	if m.closedFlag.Load() {
 		return Errorf(codes.Canceled, "wsrpc: transport closed")
 	}
@@ -263,10 +277,34 @@ func (m *Mux) route(f *transport.Frame) {
 		s := newStream(sctx, m, f.StreamId, f.Method, m.initialWindow)
 		s.deadlineCancel = dcancel
 		s.header = f.Headers
+		// Checked under the lock closeWithStatus takes, so an OPEN racing the
+		// close is either ended by it or refused here, never missed.
 		m.mu.Lock()
+		if st := m.ending; st != nil {
+			m.mu.Unlock()
+			s.failWith(st)
+			if dcancel != nil {
+				dcancel()
+			}
+			m.writeCtrl(&transport.Frame{StreamId: f.StreamId, Kind: transport.Kind_KIND_RST, Status: statusToProto(st)})
+			return
+		}
 		m.streams[f.StreamId] = s
 		m.mu.Unlock()
 		m.onOpen(s)
+		return
+	}
+	if f.Kind == transport.Kind_KIND_CONN_END {
+		// The server ended the whole connection; only a client honors it.
+		if m.onOpen == nil && f.StreamId == 0 {
+			st := statusFromProto(f.Status)
+			m.mu.Lock()
+			if m.ending == nil {
+				m.ending = st
+			}
+			m.mu.Unlock()
+			m.failAll(st)
+		}
 		return
 	}
 
@@ -331,6 +369,46 @@ func (m *Mux) failAll(err error) {
 		delete(m.streams, id)
 	}
 	m.mu.Unlock()
+}
+
+// endStatus is the status the connection ends with, or nil while it does not.
+func (m *Mux) endStatus() *Status {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.ending
+}
+
+// closeWithStatus ends the connection with st: every live stream gets an END
+// carrying st, then the peer gets KIND_CONN_END. Frames go out in that order
+// on one socket, so a peer that ignores CONN_END still learns st from its
+// streams. Only then are the streams ended locally (their handlers' contexts
+// cancelled): ctx may be one of those contexts, and must stay usable for the
+// writes. ctx bounds the writes. The socket stays open; its owner closes it.
+// Only the first call acts.
+func (m *Mux) closeWithStatus(ctx context.Context, st *Status) error {
+	m.mu.Lock()
+	if m.ending != nil {
+		m.mu.Unlock()
+		return nil
+	}
+	m.ending = st
+	streams := slices.Collect(maps.Values(m.streams))
+	m.mu.Unlock()
+
+	errs := make([]error, 0, len(streams)+1)
+	ended := make([]*Stream, 0, len(streams))
+	for _, s := range streams {
+		owned, err := s.sendEnd(ctx, st, nil)
+		if owned {
+			ended = append(ended, s)
+		}
+		errs = append(errs, err)
+	}
+	errs = append(errs, m.write(ctx, &transport.Frame{Kind: transport.Kind_KIND_CONN_END, Status: statusToProto(st)}))
+	for _, s := range ended {
+		s.failWith(st)
+	}
+	return errors.Join(errs...)
 }
 
 // Close shuts the mux and underlying conn. It marks the mux as deliberately

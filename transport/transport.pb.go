@@ -32,6 +32,11 @@ const (
 	Kind_KIND_RST           Kind = 5
 	Kind_KIND_HEADER        Kind = 6 // server->client only: leading response metadata, at most once before any MSG
 	Kind_KIND_WINDOW_UPDATE Kind = 7 // flow control: returns credit (window delta bytes) to the sender for stream_id
+	// server->client only, stream_id 0: the server ends the whole connection with
+	// status. The client fails every stream with it and does not reconnect. Sent
+	// after the END of every live stream, so a client ignoring it still gets the
+	// status on its streams.
+	Kind_KIND_CONN_END Kind = 8
 )
 
 // Enum value maps for Kind.
@@ -45,6 +50,7 @@ var (
 		5: "KIND_RST",
 		6: "KIND_HEADER",
 		7: "KIND_WINDOW_UPDATE",
+		8: "KIND_CONN_END",
 	}
 	Kind_value = map[string]int32{
 		"KIND_UNSPECIFIED":   0,
@@ -55,6 +61,7 @@ var (
 		"KIND_RST":           5,
 		"KIND_HEADER":        6,
 		"KIND_WINDOW_UPDATE": 7,
+		"KIND_CONN_END":      8,
 	}
 )
 
@@ -92,7 +99,7 @@ type Frame struct {
 	Kind          Kind                   `protobuf:"varint,2,opt,name=kind,proto3,enum=wsproto.transport.v1.Kind" json:"kind,omitempty"`
 	Headers       map[string]string      `protobuf:"bytes,3,rep,name=headers,proto3" json:"headers,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"` // OPEN: metadata + deadline; END: trailers
 	Payload       []byte                 `protobuf:"bytes,4,opt,name=payload,proto3" json:"payload,omitempty"`                                                                           // MSG: one marshaled request/response message
-	Status        *Status                `protobuf:"bytes,5,opt,name=status,proto3" json:"status,omitempty"`                                                                             // END only
+	Status        *Status                `protobuf:"bytes,5,opt,name=status,proto3" json:"status,omitempty"`                                                                             // END, RST, CONN_END
 	Method        string                 `protobuf:"bytes,6,opt,name=method,proto3" json:"method,omitempty"`                                                                             // OPEN only: "/pkg.Service/Method"
 	Window        uint32                 `protobuf:"varint,8,opt,name=window,proto3" json:"window,omitempty"`                                                                            // WINDOW_UPDATE only: credit delta in bytes returned to the sender for stream_id
 	unknownFields protoimpl.UnknownFields
@@ -257,7 +264,7 @@ const file_transport_transport_proto_rawDesc = "" +
 	"\x06Status\x12\x12\n" +
 	"\x04code\x18\x01 \x01(\x05R\x04code\x12\x18\n" +
 	"\amessage\x18\x02 \x01(\tR\amessage\x12\x18\n" +
-	"\adetails\x18\x03 \x03(\fR\adetails*\x93\x01\n" +
+	"\adetails\x18\x03 \x03(\fR\adetails*\xa6\x01\n" +
 	"\x04Kind\x12\x14\n" +
 	"\x10KIND_UNSPECIFIED\x10\x00\x12\r\n" +
 	"\tKIND_OPEN\x10\x01\x12\f\n" +
@@ -266,7 +273,8 @@ const file_transport_transport_proto_rawDesc = "" +
 	"\bKIND_END\x10\x04\x12\f\n" +
 	"\bKIND_RST\x10\x05\x12\x0f\n" +
 	"\vKIND_HEADER\x10\x06\x12\x16\n" +
-	"\x12KIND_WINDOW_UPDATE\x10\aB2Z0github.com/gopherex/ws-proto/transport;transportb\x06proto3"
+	"\x12KIND_WINDOW_UPDATE\x10\a\x12\x11\n" +
+	"\rKIND_CONN_END\x10\bB2Z0github.com/gopherex/ws-proto/transport;transportb\x06proto3"
 
 var (
 	file_transport_transport_proto_rawDescOnce sync.Once

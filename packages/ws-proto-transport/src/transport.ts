@@ -39,8 +39,9 @@ export { SUBPROTOCOL };
  *   - connecting: a socket is being dialed (WebSocket handshake in progress).
  *   - connected: the socket is open and carrying frames.
  *   - disconnected: the connection died and no redial is scheduled (reconnect
- *     off, or a permanent failure such as a subprotocol mismatch); `error` is
- *     the cause. retryNow() dials again.
+ *     off, or a permanent failure such as a subprotocol mismatch or the server
+ *     ending the connection with a status); `error` is the cause — for a server
+ *     end, its status with code, message and details. retryNow() dials again.
  *   - closed: close() was called; terminal.
  */
 export type ConnectionState =

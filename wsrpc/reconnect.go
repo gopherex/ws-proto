@@ -114,6 +114,12 @@ func (r *reconnector) run() {
 			return
 		}
 
+		// The server ended the connection with a status (KIND_CONN_END): a
+		// redial would only be refused again. Keep the dead mux installed so
+		// NewStream keeps failing with that status.
+		if mux.endStatus() != nil {
+			return
+		}
 		cc.mu.Lock()
 		if cc.closed {
 			cc.mu.Unlock()

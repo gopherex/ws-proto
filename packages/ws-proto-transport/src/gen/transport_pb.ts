@@ -10,7 +10,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file transport.proto.
  */
 export const file_transport: GenFile = /*@__PURE__*/
-  fileDesc("Cg90cmFuc3BvcnQucHJvdG8SFHdzcHJvdG8udHJhbnNwb3J0LnYxIo4CCgVGcmFtZRIRCglzdHJlYW1faWQYASABKA0SKAoEa2luZBgCIAEoDjIaLndzcHJvdG8udHJhbnNwb3J0LnYxLktpbmQSOQoHaGVhZGVycxgDIAMoCzIoLndzcHJvdG8udHJhbnNwb3J0LnYxLkZyYW1lLkhlYWRlcnNFbnRyeRIPCgdwYXlsb2FkGAQgASgMEiwKBnN0YXR1cxgFIAEoCzIcLndzcHJvdG8udHJhbnNwb3J0LnYxLlN0YXR1cxIOCgZtZXRob2QYBiABKAkSDgoGd2luZG93GAggASgNGi4KDEhlYWRlcnNFbnRyeRILCgNrZXkYASABKAkSDQoFdmFsdWUYAiABKAk6AjgBIjgKBlN0YXR1cxIMCgRjb2RlGAEgASgFEg8KB21lc3NhZ2UYAiABKAkSDwoHZGV0YWlscxgDIAMoDCqTAQoES2luZBIUChBLSU5EX1VOU1BFQ0lGSUVEEAASDQoJS0lORF9PUEVOEAESDAoIS0lORF9NU0cQAhITCg9LSU5EX0hBTEZfQ0xPU0UQAxIMCghLSU5EX0VORBAEEgwKCEtJTkRfUlNUEAUSDwoLS0lORF9IRUFERVIQBhIWChJLSU5EX1dJTkRPV19VUERBVEUQB0IyWjBnaXRodWIuY29tL2dvcGhlcmV4L3dzLXByb3RvL3RyYW5zcG9ydDt0cmFuc3BvcnRiBnByb3RvMw");
+  fileDesc("Cg90cmFuc3BvcnQucHJvdG8SFHdzcHJvdG8udHJhbnNwb3J0LnYxIo4CCgVGcmFtZRIRCglzdHJlYW1faWQYASABKA0SKAoEa2luZBgCIAEoDjIaLndzcHJvdG8udHJhbnNwb3J0LnYxLktpbmQSOQoHaGVhZGVycxgDIAMoCzIoLndzcHJvdG8udHJhbnNwb3J0LnYxLkZyYW1lLkhlYWRlcnNFbnRyeRIPCgdwYXlsb2FkGAQgASgMEiwKBnN0YXR1cxgFIAEoCzIcLndzcHJvdG8udHJhbnNwb3J0LnYxLlN0YXR1cxIOCgZtZXRob2QYBiABKAkSDgoGd2luZG93GAggASgNGi4KDEhlYWRlcnNFbnRyeRILCgNrZXkYASABKAkSDQoFdmFsdWUYAiABKAk6AjgBIjgKBlN0YXR1cxIMCgRjb2RlGAEgASgFEg8KB21lc3NhZ2UYAiABKAkSDwoHZGV0YWlscxgDIAMoDCqmAQoES2luZBIUChBLSU5EX1VOU1BFQ0lGSUVEEAASDQoJS0lORF9PUEVOEAESDAoIS0lORF9NU0cQAhITCg9LSU5EX0hBTEZfQ0xPU0UQAxIMCghLSU5EX0VORBAEEgwKCEtJTkRfUlNUEAUSDwoLS0lORF9IRUFERVIQBhIWChJLSU5EX1dJTkRPV19VUERBVEUQBxIRCg1LSU5EX0NPTk5fRU5EEAhCMlowZ2l0aHViLmNvbS9nb3BoZXJleC93cy1wcm90by90cmFuc3BvcnQ7dHJhbnNwb3J0YgZwcm90bzM");
 
 /**
  * Frame is the single wire unit multiplexed over one WebSocket connection.
@@ -45,7 +45,7 @@ export type Frame = Message<"wsproto.transport.v1.Frame"> & {
   payload: Uint8Array;
 
   /**
-   * END only
+   * END, RST, CONN_END
    *
    * @generated from field: wsproto.transport.v1.Status status = 5;
    */
@@ -151,6 +151,16 @@ export enum Kind {
    * @generated from enum value: KIND_WINDOW_UPDATE = 7;
    */
   WINDOW_UPDATE = 7,
+
+  /**
+   * server->client only, stream_id 0: the server ends the whole connection with
+   * status. The client fails every stream with it and does not reconnect. Sent
+   * after the END of every live stream, so a client ignoring it still gets the
+   * status on its streams.
+   *
+   * @generated from enum value: KIND_CONN_END = 8;
+   */
+  CONN_END = 8,
 }
 
 /**

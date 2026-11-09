@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"sync"
+	"sync/atomic"
 
 	"github.com/gopherex/ws-proto/transport"
 	"google.golang.org/grpc/codes"
@@ -49,6 +50,10 @@ type Stream struct {
 	sendDone     bool // guarded by mu
 	halfCloseOne sync.Once
 	endOne       sync.Once
+	// endSent admits one server END: a connection closed with a status ends
+	// every stream first, and the handler returning afterwards must not
+	// overwrite that status on the wire.
+	endSent atomic.Bool
 
 	// Flow control (credit windowing), all guarded by mu.
 	// sendWindow is the credit (bytes) we may send before blocking. It starts at
@@ -439,14 +444,26 @@ func (s *Stream) CloseSend() error {
 // After the write attempt, terminate locally even if the peer never half-closes
 // or the write fails, releasing blocked Recv/Send calls and context children.
 func (s *Stream) end(st *Status, trailers map[string]string) error {
-	defer s.failWith(st)
-	f := &transport.Frame{
+	owned, err := s.sendEnd(s.mux.ctx, st, trailers)
+	if owned {
+		s.failWith(st)
+	}
+	return err
+}
+
+// sendEnd writes the stream's END frame, bounded by ctx, unless an END was
+// already sent; owned reports whether this call sent it. It does not end the
+// stream locally: the caller does that with failWith once it is done writing.
+func (s *Stream) sendEnd(ctx context.Context, st *Status, trailers map[string]string) (owned bool, err error) {
+	if !s.endSent.CompareAndSwap(false, true) {
+		return false, nil
+	}
+	return true, s.mux.write(ctx, &transport.Frame{
 		StreamId: s.id,
 		Kind:     transport.Kind_KIND_END,
 		Headers:  trailers,
 		Status:   statusToProto(st),
-	}
-	return s.mux.write(s.mux.ctx, f)
+	})
 }
 
 func (s *Stream) applyEnd(f *transport.Frame) *Status {
