@@ -2,6 +2,7 @@ package mobilegen
 
 import (
 	"fmt"
+	"strings"
 
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
@@ -84,4 +85,40 @@ func (names kotlinNames) message(message protoreflect.MessageDescriptor) (string
 	}
 	name := kotlinMessageName(message, names[message.ParentFile().Path()])
 	return name, name + ".ADAPTER"
+}
+
+// Wire's copy constructor emits a raw simple class name, even in 7.2.1.
+// Validate the RPC message graph before returning any generated files.
+func validateWireService(service protoreflect.ServiceDescriptor) error {
+	seen := make(map[protoreflect.FullName]bool)
+	var visit func(protoreflect.MessageDescriptor) error
+	visit = func(message protoreflect.MessageDescriptor) error {
+		if seen[message.FullName()] {
+			return nil
+		}
+		seen[message.FullName()] = true
+		const hardKeywords = " as break class continue do else false for fun if in interface is null object package return super this throw true try typealias typeof val var when while "
+		for current := protoreflect.Descriptor(message); current != nil; current = current.Parent() {
+			if _, ok := current.(protoreflect.MessageDescriptor); ok && strings.Contains(hardKeywords, " "+string(current.Name())+" ") {
+				return fmt.Errorf("%s: Wire cannot generate Kotlin message %s: its name is a Kotlin hard keyword; rename the message (Wire emits an unescaped copy constructor)", message.ParentFile().Path(), current.FullName())
+			}
+		}
+		for i := 0; i < message.Fields().Len(); i++ {
+			if child := message.Fields().Get(i).Message(); child != nil {
+				if err := visit(child); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+	for i := 0; i < service.Methods().Len(); i++ {
+		method := service.Methods().Get(i)
+		for _, message := range []protoreflect.MessageDescriptor{method.Input(), method.Output()} {
+			if err := visit(message); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }

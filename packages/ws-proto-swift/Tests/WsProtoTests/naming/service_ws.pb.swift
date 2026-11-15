@@ -12,8 +12,8 @@ public final class APIKeywordServiceClient: Swift.Sendable {
         self.transport = transport
     }
 
-    public func `class`(_ request: Outer.TypeMessage, options: WsProto.CallOptions = .init()) async throws -> WsProto.UnaryResponse<Outer.when> {
-        try await transport.unary(method: "/naming.api.KeywordService/Class", request: request, responseType: Outer.when.self, options: options)
+    public func `class`(_ request: Outer.TypeMessage, options: WsProto.CallOptions = .init()) async throws -> WsProto.UnaryResponse<Outer.WhenMessage> {
+        try await transport.unary(method: "/naming.api.KeywordService/Class", request: request, responseType: Outer.WhenMessage.self, options: options)
     }
 
     public func `initRPC`(_ request: StringMessage, options: WsProto.CallOptions = .init()) async throws -> WsProto.ResponseStream<StringMessageMessage> {

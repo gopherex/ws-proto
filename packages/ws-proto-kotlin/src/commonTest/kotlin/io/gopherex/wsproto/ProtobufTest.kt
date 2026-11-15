@@ -4,7 +4,7 @@ import com.squareup.wire.ProtoAdapter
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.runTest
-import wiretest.`when`.`class` as Presence
+import wiretest.`when`.PresenceMessage as Presence
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals

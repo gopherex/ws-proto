@@ -21,11 +21,23 @@ Apply SKIE to the application's framework module to expose `Flow` as Swift
 application operations and state to Swift; the application controls how much
 of its protobuf and transport API crosses that boundary.
 
+SKIE does not turn arbitrary Kotlin Flow exceptions into Swift errors. The
+application facade maps expected failures to typed state/events before exporting
+a flow, and rethrows `CancellationException` so Swift task cancellation still
+resets the RPC. The consumer fixture demonstrates this boundary. Suspending
+operations declare `@Throws` for errors that Swift must receive.
+
 The Kotlin API uses Wire models rather than the Java-lite models used by
 version 1.10.0. Regenerate messages with Wire and RPC clients with the matching
 `protoc-gen-ws-kotlin`; Java builders and parsers are not part of this API.
 The wire protocol and the Go, TypeScript and standalone Swift clients do not
 require migration.
+
+Wire cannot generate valid Kotlin copy constructors for message types named
+with Kotlin hard keywords such as `class` or `when`. The RPC generator rejects
+these names with a schema diagnostic. Use ordinary message type names; keyword
+packages, fields and RPC methods have separate escaping rules. Generated files
+are never patched to conceal compiler errors.
 
 ## Protocol contract
 

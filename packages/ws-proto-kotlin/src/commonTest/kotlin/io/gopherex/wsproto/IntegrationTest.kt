@@ -40,7 +40,7 @@ class IntegrationTest {
                 val client = EchoServiceClient(transport)
                 assertEquals("hello generated", client.unary(UnaryRequest(name = "generated")).greeting)
                 assertEquals(3, client.serverStream(ServerStreamRequest(count = 3)).toList().size)
-                assertEquals(9, client.clientStream(flowOf(ClientStreamRequest(value = 9))).sum)
+                assertEquals(9, client.clientStream(flowOf(ClientStreamRequest(value_ = 9))).sum)
                 assertEquals("echo:typed", client.bidi(flowOf(BidiRequest(text = "typed"))).toList().single().echo)
             }
         }
@@ -57,7 +57,7 @@ class IntegrationTest {
                 val responses = transport.stream(server, flowOf(ServerStreamRequest(count = 1000)))
                 assertEquals((0 until 1000).toList(), responses.message.map { it.index }.toList())
                 val sum = firstResponse(transport.stream(client, flow {
-                    repeat(100_000) { emit(ClientStreamRequest(value = 1000)) }
+                    repeat(100_000) { emit(ClientStreamRequest(value_ = 1000)) }
                 }))
                 assertEquals(100_000_000, sum.sum)
                 val echoes = transport.stream(bidi, flow {

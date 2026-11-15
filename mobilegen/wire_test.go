@@ -40,18 +40,19 @@ func TestWireAdapterDispatch(t *testing.T) {
 	}
 }
 
-func TestWireAllowsKotlinKeywordTypes(t *testing.T) {
+func TestWireRejectsKeywordMessageTypes(t *testing.T) {
 	t.Parallel()
-	request := echoRequest()
-	request.ProtoFile[0].Options.JavaOuterClassname = proto.String("ignored-class")
-	request.ProtoFile[0].MessageType[0].Name = proto.String("class")
-	request.ProtoFile[0].Service[0].Method[0].InputType = proto.String(".echo.v1.class")
-	response := Generate(request, Kotlin)
-	if response.GetError() != "" {
-		t.Fatal(response.GetError())
-	}
-	if !strings.Contains(response.File[0].GetContent(), "`echo`.`v1`.`class`.ADAPTER") {
-		t.Fatal(response)
+	for _, name := range []string{"class", "when"} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			request := echoRequest()
+			request.ProtoFile[0].MessageType[0].Name = proto.String(name)
+			request.ProtoFile[0].Service[0].Method[0].InputType = proto.String(".echo.v1." + name)
+			response := Generate(request, Kotlin)
+			if !strings.Contains(response.GetError(), "Wire cannot generate") || len(response.File) != 0 {
+				t.Fatalf("expected actionable atomic rejection: %v", response)
+			}
+		})
 	}
 }
 
@@ -156,5 +157,32 @@ func TestWireWellKnownAdapters(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestWireKeywordInReachableField(t *testing.T) {
+	t.Parallel()
+	request := echoRequest()
+	file := request.ProtoFile[0]
+	file.MessageType = append(file.MessageType, &descriptorpb.DescriptorProto{Name: proto.String("when")})
+	file.MessageType[0].Field = append(file.MessageType[0].Field, &descriptorpb.FieldDescriptorProto{
+		Name: proto.String("nested"), Number: proto.Int32(100), Label: descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL.Enum(),
+		Type: descriptorpb.FieldDescriptorProto_TYPE_MESSAGE.Enum(), TypeName: proto.String(".echo.v1.when"),
+	})
+	response := Generate(request, Kotlin)
+	if !strings.Contains(response.GetError(), "Wire cannot generate") || len(response.File) != 0 {
+		t.Fatal(response.GetError())
+	}
+}
+
+func TestWireSoftKeywordMessageTypes(t *testing.T) {
+	t.Parallel()
+	for _, name := range []string{"data", "value", "field", "get", "set", "internal"} {
+		request := echoRequest()
+		request.ProtoFile[0].MessageType[0].Name = proto.String(name)
+		request.ProtoFile[0].Service[0].Method[0].InputType = proto.String(".echo.v1." + name)
+		if response := Generate(request, Kotlin); response.GetError() != "" {
+			t.Fatalf("%s: %s", name, response.GetError())
+		}
 	}
 }

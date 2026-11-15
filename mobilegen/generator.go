@@ -129,6 +129,11 @@ func generate(request *pluginpb.CodeGeneratorRequest, language Language) ([]*plu
 		}
 		for i := 0; i < file.Services().Len(); i++ {
 			service := file.Services().Get(i)
+			if language == Kotlin {
+				if err := validateWireService(service); err != nil {
+					return nil, err
+				}
+			}
 			if err := validateService(service); err != nil {
 				return nil, err
 			}

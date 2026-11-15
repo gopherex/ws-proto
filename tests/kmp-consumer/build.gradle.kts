@@ -30,7 +30,7 @@ kotlin {
     }
     sourceSets {
         commonMain {
-            kotlin.srcDir(generatedClients)
+            kotlin.srcDir(generateWsClient.map { it.outputs.files.singleFile })
             dependencies {
                 implementation("io.gopherex:ws-proto-kotlin:${publishedVersion ?: "1.0"}")
                 implementation("com.squareup.wire:wire-runtime:5.4.0")
@@ -47,8 +47,4 @@ wire {
 
 skie {
     analytics { enabled.set(false) }
-}
-
-tasks.matching { it.name.startsWith("compileKotlin") }.configureEach {
-    dependsOn(generateWsClient)
 }

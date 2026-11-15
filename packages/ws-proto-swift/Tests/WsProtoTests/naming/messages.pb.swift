@@ -39,7 +39,7 @@ public nonisolated struct Outer: Sendable {
     public init() {}
   }
 
-  public nonisolated struct when: Sendable {
+  public nonisolated struct WhenMessage: Sendable {
     // SwiftProtobuf.Message conformance is added in an extension below. See the
     // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
     // methods supported on all messages.
@@ -131,8 +131,8 @@ nonisolated extension Outer.TypeMessage: SwiftProtobuf.Message, SwiftProtobuf._M
   }
 }
 
-nonisolated extension Outer.when: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
-  public static let protoMessageName: String = Outer.protoMessageName + ".when"
+nonisolated extension Outer.WhenMessage: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = Outer.protoMessageName + ".WhenMessage"
   public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}value\0")
 
   public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
@@ -154,7 +154,7 @@ nonisolated extension Outer.when: SwiftProtobuf.Message, SwiftProtobuf._MessageI
     try unknownFields.traverse(visitor: &visitor)
   }
 
-  public static func ==(lhs: Outer.when, rhs: Outer.when) -> Bool {
+  public static func ==(lhs: Outer.WhenMessage, rhs: Outer.WhenMessage) -> Bool {
     if lhs.value != rhs.value {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true

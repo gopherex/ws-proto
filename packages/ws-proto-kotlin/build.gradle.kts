@@ -56,7 +56,9 @@ wire {
 val wireCompiler by configurations.creating
 val protocBinary by configurations.creating
 val protoSchemas by configurations.creating { isTransitive = false }
-val protocPlatform = if (System.getProperty("os.name").startsWith("Mac")) "osx-aarch_64" else "linux-x86_64"
+val protocOs = if (System.getProperty("os.name").startsWith("Mac")) "osx" else "linux"
+val protocArch = if (System.getProperty("os.arch") in listOf("aarch64", "arm64")) "aarch_64" else "x86_64"
+val protocPlatform = "$protocOs-$protocArch"
 dependencies {
     wireCompiler("com.squareup.wire:wire-compiler:5.4.0")
     protocBinary("com.google.protobuf:protoc:4.36.2:$protocPlatform@exe")
@@ -72,11 +74,12 @@ val generateTestMessages by tasks.registering(JavaExec::class) {
     args("--proto_path=${file("../../example/proto")}", "--proto_path=${file("../../mobilegen/testdata/naming")}",
         "--proto_path=${file("../../mobilegen/testdata/wire")}",
         "--kotlin_out=${layout.buildDirectory.dir("generated/wire-test").get().asFile}",
-        "--rpc_role=none", "echo/v1/echo.proto", "messages.proto", "service.proto", "presence.proto")
+        "--kotlin_rpc_role=none", "echo/v1/echo.proto", "messages.proto", "service.proto", "presence.proto")
     inputs.dir("../../example/proto")
     inputs.dir("../../mobilegen/testdata/naming")
     inputs.dir("../../mobilegen/testdata/wire")
     outputs.dir(layout.buildDirectory.dir("generated/wire-test"))
+    doFirst { delete(layout.buildDirectory.dir("generated/wire-test")) }
 }
 val wsGenerator = layout.buildDirectory.file("bin/protoc-gen-ws-kotlin")
 val buildWsGenerator by tasks.registering(Exec::class) {
@@ -96,6 +99,7 @@ val generateTestClients by tasks.registering(Exec::class) {
     inputs.file(wsGenerator)
     outputs.dir(output)
     doFirst {
+        delete(output)
         output.get().asFile.mkdirs()
         val protoc = protocBinary.singleFile
         protoc.setExecutable(true)

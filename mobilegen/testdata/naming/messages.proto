@@ -8,7 +8,7 @@ option java_multiple_files = true;
 
 message Outer {
   message Type { string value = 1; }
-  message when { string value = 1; }
+  message WhenMessage { string value = 1; }
 }
 
 message String { string value = 1; }

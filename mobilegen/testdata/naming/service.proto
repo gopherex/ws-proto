@@ -11,7 +11,7 @@ option java_outer_classname = "ServiceMessages";
 message Local { string value = 1; }
 
 service KeywordService {
-  rpc Class(naming.v1.Outer.Type) returns (naming.v1.Outer.when);
+  rpc Class(naming.v1.Outer.Type) returns (naming.v1.Outer.WhenMessage);
   rpc Init(naming.v1.String) returns (stream naming.v1.StringMessage);
   rpc Upload(stream naming.v1.StringMessage) returns (Local);
   rpc Bidi(stream Local) returns (stream naming.v1.String);

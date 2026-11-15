@@ -116,12 +116,12 @@ jobs:
           distribution: temurin
           java-version: "17"
       - uses: gradle/actions/setup-gradle@v4
+      - name: Test Swift AsyncSequence and cancellation through SKIE
+        run: scripts/with-mobile-server.sh scripts/test-kmp-swift.sh
       - name: Test shared runtime on iOS Simulator against Go
         run: >-
           scripts/with-ios-simulator.sh scripts/with-mobile-server.sh packages/ws-proto-kotlin/gradlew
           -p packages/ws-proto-kotlin --no-daemon iosSimulatorArm64Test
-      - name: Test Swift AsyncSequence and cancellation through SKIE
-        run: scripts/with-mobile-server.sh scripts/test-kmp-swift.sh
       - name: Assemble all KMP publications
         run: packages/ws-proto-kotlin/gradlew -p packages/ws-proto-kotlin --no-daemon publishToMavenLocal
 

@@ -55,27 +55,44 @@ target to JVM 17; the library's Android consumer uses minSdk 26.
 
 ## Generate and call
 
-Install protoc 36.2 (`protoc --version` prints `libprotoc 36.2`) and Go 1.25+.
-The library depends on protobuf-javalite 4.36.2; use its matching compiler to
-generate Java-lite messages. In your Android/JVM module directory:
+Use Kotlin 2.2.21, Wire 5.4.0 and protoc 36.2. Wire generates the shared
+protobuf models; `protoc-gen-ws-kotlin` generates RPC clients using their adapters.
+Apply Wire to your Kotlin Multiplatform module:
+
+```kotlin
+plugins {
+    kotlin("multiplatform") version "2.2.21"
+    id("com.squareup.wire") version "5.4.0"
+}
+wire {
+    sourcePath { srcDir("src/commonMain/proto") }
+    kotlin { rpcRole = "none" }
+}
+```
+
+Place your service schemas in `src/commonMain/proto` and generate RPC clients:
 
 ```sh
-go install github.com/gopherex/ws-proto/cmd/protoc-gen-ws-kotlin@v1.10.0
+go install github.com/gopherex/ws-proto/cmd/protoc-gen-ws-kotlin@latest
 export PATH="$(go env GOPATH)/bin:$PATH"
-mkdir -p src/main/proto/echo/v1 src/main/java src/main/kotlin
-curl -fsSL https://raw.githubusercontent.com/gopherex/ws-proto/v1.10.0/example/proto/echo/v1/echo.proto \
-    -o src/main/proto/echo/v1/echo.proto
-protoc -I src/main/proto \
-    --java_out=lite:src/main/java \
-    --ws-kotlin_out=src/main/kotlin \
+mkdir -p src/commonMain/kotlin
+protoc -I src/commonMain/proto \
+    --ws-kotlin_out=src/commonMain/kotlin \
     echo/v1/echo.proto
 ```
 
-The module must apply its Kotlin JVM or Android Kotlin plugin so it compiles
-`src/main/kotlin`. The RPC generator reads the same schema and honors its Java
-package/outer-class options. The protobuf message runtime is already a transitive
-dependency of this library. Replace the downloaded Echo schema with your own
-service definitions.
+Use the generator version matching the runtime release. Wire generates models
+when Gradle compiles the module. RPC clients honor `wire.wire_package`, then
+`java_package`, then the proto package; Java outer-class and multiple-file options
+do not affect Wire's Kotlin names. Protobuf message names that are Kotlin hard
+keywords are rejected because Wire emits invalid copy constructors for them.
+Keyword package segments, field names and RPC methods remain supported.
+
+For Swift use of a KMP framework, apply SKIE 0.10.7 in the consuming framework
+module to bridge suspend functions and Flow. The library publishes Kotlin klibs;
+`tests/kmp-consumer` demonstrates an application framework with a Swift-facing
+facade. The separate `packages/ws-proto-swift` client remains available for
+applications that do not use Kotlin.
 
 ```kotlin
 import io.gopherex.wsproto.CallOptions
@@ -159,8 +176,7 @@ pause/resume from the application's lifecycle owner as appropriate.
 From the repository root:
 
 ```sh
-./packages/ws-proto-kotlin/gradlew -p packages/ws-proto-kotlin jvmTest
-./scripts/with-mobile-server.sh ./packages/ws-proto-kotlin/gradlew -p packages/ws-proto-kotlin jvmTest --rerun-tasks
+./scripts/with-mobile-server.sh ./packages/ws-proto-kotlin/gradlew -p packages/ws-proto-kotlin jvmTest
 ./packages/ws-proto-kotlin/gradlew -p packages/ws-proto-kotlin publishToMavenLocal
 ```
 

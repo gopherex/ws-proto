@@ -56,7 +56,13 @@ header/trailer callbacks; coroutine cancellation cancels the call. Models use
 Wire `ADAPTER` codecs on every platform. Packages follow `wire.wire_package`,
 then `java_package`, then the proto package; nested messages stay nested.
 `java_multiple_files` and `java_outer_classname` have no effect. References escape
-Kotlin keywords, including message names such as `class`.
+Kotlin keyword packages, fields and RPC methods.
+
+Wire 5.4.0 and the checked 7.2.1 compiler emit invalid `copy()` constructors for
+message names that are Kotlin hard keywords, such as `class` and `when`
+([upstream implementation](https://github.com/square/wire/blob/7.2.1/wire-kotlin-generator/src/main/java/com/squareup/wire/kotlin/KotlinGenerator.kt#L982)).
+The RPC generator rejects these names in reachable message types before writing
+files and asks you to rename the message. Soft keywords remain supported.
 
 Wire well-known types use their built-in representations and adapters: `Empty`
 is `Unit`, timestamp/duration use Wire time types, and wrappers/JSON values can
