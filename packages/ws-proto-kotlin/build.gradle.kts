@@ -110,7 +110,7 @@ tasks.withType<KotlinCompilationTask<*>>().configureEach {
     if (name.contains("Test")) dependsOn(generateTestMessages, generateTestClients)
 }
 tasks.withType<KotlinNativeSimulatorTest>().configureEach {
-    providers.environmentVariable("WS_PROTO_IOS_DEVICE").orNull?.let { deviceId = it }
+    providers.environmentVariable("WS_PROTO_IOS_DEVICE").orNull?.let { device.set(it) }
     environment("SIMCTL_CHILD_WS_PROTO_TEST_URL", providers.environmentVariable("WS_PROTO_TEST_URL").getOrElse(""))
     inputs.property("wsProtoTestUrl", providers.environmentVariable("WS_PROTO_TEST_URL").getOrElse(""))
 }
