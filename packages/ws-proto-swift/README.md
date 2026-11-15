@@ -6,7 +6,7 @@ or macOS 12+ and Swift 6.1+.
 ## Install
 
 In Xcode, add `https://github.com/gopherex/ws-proto.git` with exact version
-`1.10.0` and select the `WsProto` product. Add
+`1.11.0` and select the `WsProto` product. Add
 `https://github.com/apple/swift-protobuf.git` at `1.39.0` and its
 `SwiftProtobuf` product to the target that compiles your generated messages.
 
@@ -21,7 +21,7 @@ let package = Package(
     platforms: [.iOS(.v15), .macOS(.v12)],
     products: [.library(name: "EchoClient", targets: ["EchoClient"])],
     dependencies: [
-        .package(url: "https://github.com/gopherex/ws-proto.git", exact: "1.10.0"),
+        .package(url: "https://github.com/gopherex/ws-proto.git", exact: "1.11.0"),
         .package(url: "https://github.com/apple/swift-protobuf.git", exact: "1.39.0"),
     ],
     targets: [
@@ -41,7 +41,7 @@ Swift fixtures. Building the RPC generator requires Go 1.25+. Build Apple's
 message generator with the same SwiftProtobuf version as the runtime:
 
 ```sh
-go install github.com/gopherex/ws-proto/cmd/protoc-gen-ws-swift@v1.10.0
+go install github.com/gopherex/ws-proto/cmd/protoc-gen-ws-swift@v1.11.0
 mkdir -p "$HOME/.cache/ws-proto"
 git clone --depth 1 --branch 1.39.0 https://github.com/apple/swift-protobuf.git \
     "$HOME/.cache/ws-proto/swift-protobuf-1.39.0"
@@ -56,7 +56,7 @@ own schema for your application.
 
 ```sh
 mkdir -p proto/echo/v1 Sources/EchoClient
-curl -fsSL https://raw.githubusercontent.com/gopherex/ws-proto/v1.10.0/example/proto/echo/v1/echo.proto \
+curl -fsSL https://raw.githubusercontent.com/gopherex/ws-proto/v1.11.0/example/proto/echo/v1/echo.proto \
     -o proto/echo/v1/echo.proto
 protoc -I proto \
     --swift_out=Visibility=Public:Sources/EchoClient \

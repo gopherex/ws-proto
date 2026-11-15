@@ -85,18 +85,18 @@ One `vX.Y.Z` tag identifies all implementations. The release workflow waits for
 Go, TS and mobile CI checks before publishing artifacts.
 
 * Swift: add `https://github.com/gopherex/ws-proto.git` in Xcode or SwiftPM and
-  select exact version `1.10.0`. The root `Package.swift` exports `WsProto`.
+  select exact version `1.11.0`. The root `Package.swift` exports `WsProto`.
 * Kotlin: add `https://maven.pkg.github.com/gopherex/ws-proto` as a Maven
-  repository and depend on `io.gopherex:ws-proto-kotlin:1.10.0`. GitHub requires
+  repository and depend on `io.gopherex:ws-proto-kotlin:1.11.0`. GitHub requires
   package-read credentials even for public Maven packages. Credentials belong
   in local Gradle properties or CI secrets, never in application source.
 * Generators: install `protoc-gen-ws-swift` and `protoc-gen-ws-kotlin` at
-  `v1.10.0`. GitHub Releases contains native executables for Linux, macOS and
+  `v1.11.0`. GitHub Releases contains native executables for Linux, macOS and
   Windows on amd64 and arm64.
 
 ```sh
-go install github.com/gopherex/ws-proto/cmd/protoc-gen-ws-swift@v1.10.0
-go install github.com/gopherex/ws-proto/cmd/protoc-gen-ws-kotlin@v1.10.0
+go install github.com/gopherex/ws-proto/cmd/protoc-gen-ws-swift@v1.11.0
+go install github.com/gopherex/ws-proto/cmd/protoc-gen-ws-kotlin@v1.11.0
 export PATH="$(go env GOPATH)/bin:$PATH"
 ```
 

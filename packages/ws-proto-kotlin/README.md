@@ -33,11 +33,16 @@ dependencyResolutionManagement {
 ```
 
 ```kotlin
-// build.gradle.kts
-dependencies {
-    implementation("io.gopherex:ws-proto-kotlin:1.10.0")
+// Existing KMP shared module's build.gradle.kts
+kotlin {
+    sourceSets.commonMain.dependencies {
+        implementation("io.gopherex:ws-proto-kotlin:1.11.0")
+    }
 }
 ```
+
+In a JVM/Android-only module, use the same coordinate in its normal
+`dependencies { implementation(...) }` block. Gradle selects the JVM variant.
 
 Use a personal access token (classic) with `read:packages` for local downloads,
 or an authorized `GITHUB_TOKEN` in Actions. Set `GITHUB_ACTOR` to your GitHub
@@ -70,12 +75,15 @@ wire {
 }
 ```
 
-Place your service schemas in `src/commonMain/proto` and generate RPC clients:
+Place your service schemas in `src/commonMain/proto`. This example downloads
+the Echo schema used by the call example below; replace it with your own schema:
 
 ```sh
-go install github.com/gopherex/ws-proto/cmd/protoc-gen-ws-kotlin@latest
+go install github.com/gopherex/ws-proto/cmd/protoc-gen-ws-kotlin@v1.11.0
 export PATH="$(go env GOPATH)/bin:$PATH"
-mkdir -p src/commonMain/kotlin
+mkdir -p src/commonMain/kotlin src/commonMain/proto/echo/v1
+curl -fsSL https://raw.githubusercontent.com/gopherex/ws-proto/v1.11.0/example/proto/echo/v1/echo.proto \
+    -o src/commonMain/proto/echo/v1/echo.proto
 protoc -I src/commonMain/proto \
     --ws-kotlin_out=src/commonMain/kotlin \
     echo/v1/echo.proto
@@ -90,7 +98,7 @@ Keyword package segments, field names and RPC methods remain supported.
 
 For Swift use of a KMP framework, apply SKIE 0.10.7 in the consuming framework
 module to bridge suspend functions and Flow. The library publishes Kotlin klibs;
-`tests/kmp-consumer` demonstrates an application framework with a Swift-facing
+[tests/kmp-consumer](../../tests/kmp-consumer) demonstrates an application framework with a Swift-facing
 facade. The separate `packages/ws-proto-swift` client remains available for
 applications that do not use Kotlin.
 

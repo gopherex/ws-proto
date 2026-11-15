@@ -135,11 +135,11 @@ npm install -D @gopherex/protoc-gen-ws-es @bufbuild/protoc-gen-es @bufbuild/buf
 ### Swift (Swift Package Manager)
 
 In Xcode, add `https://github.com/gopherex/ws-proto.git`, choose exact version
-`1.10.0`, and add the `WsProto` product to your target. For a Swift package:
+`1.11.0`, and add the `WsProto` product to your target. For a Swift package:
 
 ```swift
 // Package.swift dependencies
-.package(url: "https://github.com/gopherex/ws-proto.git", exact: "1.10.0")
+.package(url: "https://github.com/gopherex/ws-proto.git", exact: "1.11.0")
 // Target dependencies
 .product(name: "WsProto", package: "ws-proto")
 ```
@@ -179,13 +179,13 @@ TypeScript and standalone Swift APIs keep their existing wire protocol.
 Install matching RPC generators with Go 1.25+:
 
 ```sh
-go install github.com/gopherex/ws-proto/cmd/protoc-gen-ws-swift@v1.10.0
-go install github.com/gopherex/ws-proto/cmd/protoc-gen-ws-kotlin@v1.10.0
+go install github.com/gopherex/ws-proto/cmd/protoc-gen-ws-swift@v1.11.0
+go install github.com/gopherex/ws-proto/cmd/protoc-gen-ws-kotlin@v1.11.0
 export PATH="$(go env GOPATH)/bin:$PATH"
 ```
 
 Prebuilt generators are also available in
-[GitHub Release v1.10.0](https://github.com/gopherex/ws-proto/releases/tag/v1.10.0).
+[GitHub Release v1.11.0](https://github.com/gopherex/ws-proto/releases/tag/v1.11.0).
 
 ---
 
