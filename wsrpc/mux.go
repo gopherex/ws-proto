@@ -12,6 +12,7 @@ import (
 
 	"github.com/gopherex/ws-proto/transport"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/protobuf/proto"
 )
 
 // timeoutHeader carries the caller's remaining deadline (decimal milliseconds)
@@ -39,12 +40,13 @@ type Mux struct {
 	initialWindow int // per-stream credit window (bytes) for flow control
 	maxStreams    int // cap on concurrent server streams; 0 = unlimited (client)
 
-	writeMu sync.Mutex // serialize frame writes
+	writeCh  chan writeRequest // unbuffered admission to the shared socket writer
+	readDone chan struct{}     // read-loop exit, after terminal frames/status are recorded
 
 	// ctrlCh carries control frames the read loop needs to emit (overflow RST,
 	// over-limit RST) so they are written by a separate writer goroutine. The
 	// read loop must NEVER perform a blocking socket write: a Send parked inside
-	// WriteFrame (peer's buffer full) holds writeMu, and an inline write on the
+	// WriteFrame (peer's buffer full) occupies the writer, and an inline write on the
 	// read loop would block behind it, stalling reads and deadlocking the conn.
 	ctrlCh chan *transport.Frame
 
@@ -85,7 +87,10 @@ func newMuxConfig(ctx context.Context, conn FrameConn, onOpen func(*Stream), rec
 		maxStreams:    maxStreams,
 		stats:         stats,
 		ctrlCh:        make(chan *transport.Frame, ctrlBufferSize),
+		writeCh:       make(chan writeRequest),
+		readDone:      make(chan struct{}),
 	}
+	go m.frameWriter()
 	go m.ctrlWriter()
 	go m.readLoop()
 	return m
@@ -148,10 +153,84 @@ func (m *Mux) startKeepalive(interval, timeout time.Duration) {
 	}()
 }
 
+// writeRequest retains its caller-owned frame only until copied is closed.
+// A caller canceled after admission waits for this ownership transfer before
+// returning, so it can immediately reuse its payload and metadata buffers.
+type writeRequest struct {
+	ctx    context.Context
+	frame  *transport.Frame
+	copied chan struct{}
+	result chan error
+}
+
+// frameWriteContext preserves request tracing values, but takes cancellation
+// and deadlines solely from the mux. Interrupting a websocket write corrupts
+// the shared connection, so an individual RPC must never cancel that write.
+type frameWriteContext struct {
+	context.Context
+	values context.Context
+}
+
+func (c frameWriteContext) Value(key any) any { return c.values.Value(key) }
+
+func (m *Mux) frameWriter() {
+	for {
+		select {
+		case <-m.ctx.Done():
+			return
+		case request := <-m.writeCh:
+			if err := request.ctx.Err(); err != nil {
+				close(request.copied)
+				request.result <- err
+				continue
+			}
+			frame := proto.CloneOf(request.frame)
+			close(request.copied)
+			ctx := frameWriteContext{Context: m.ctx, values: context.WithoutCancel(request.ctx)}
+			err := m.conn.WriteFrame(ctx, frame)
+			request.result <- err
+			if err != nil {
+				// A failed physical write cannot safely be retried on a framed socket.
+				// Wake all queued writers and terminate the read loop/active streams.
+				m.cancel()
+				return
+			}
+		}
+	}
+}
+
 func (m *Mux) write(ctx context.Context, f *transport.Frame) error {
-	m.writeMu.Lock()
-	defer m.writeMu.Unlock()
-	return m.conn.WriteFrame(ctx, f)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	request := writeRequest{ctx: ctx, frame: f, copied: make(chan struct{}), result: make(chan error, 1)}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-m.ctx.Done():
+		return m.ctx.Err()
+	case m.writeCh <- request:
+	}
+	// The admitted worker never blocks before copying/releasing this frame.
+	<-request.copied
+	select {
+	case err := <-request.result:
+		return err
+	case <-ctx.Done():
+		select {
+		case err := <-request.result:
+			return err
+		default:
+			return ctx.Err()
+		}
+	case <-m.ctx.Done():
+		select {
+		case err := <-request.result:
+			return err
+		default:
+			return m.ctx.Err()
+		}
+	}
 }
 
 // newClientStream allocates an id, registers the stream, and sends OPEN.
@@ -185,6 +264,18 @@ func (m *Mux) newClientStream(ctx context.Context, method string, headers map[st
 		Headers:  headers,
 	}); err != nil {
 		m.remove(id)
+		// A failed physical write cancels the mux. Let the read loop finish
+		// recording a queued CONN_END before exposing a transport error from
+		// this OPEN; its explicit status also governs calls racing shutdown.
+		if ctx.Err() == nil {
+			select {
+			case <-m.readDone:
+			case <-ctx.Done():
+			}
+		}
+		if st := m.endStatus(); st != nil {
+			return nil, st
+		}
 		return nil, err
 	}
 	return s, nil
@@ -197,6 +288,7 @@ func (m *Mux) remove(id uint32) {
 }
 
 func (m *Mux) readLoop() {
+	defer close(m.readDone)
 	defer m.cancel()
 	for {
 		f, err := m.conn.ReadFrame(m.ctx)

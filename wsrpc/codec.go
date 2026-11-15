@@ -12,6 +12,11 @@ import (
 // in-memory pair for tests and single-process topologies. DialConn and
 // Server.ServeConn accept any FrameConn, so callers may also supply their own
 // implementation (over net.Pipe, an io.Pipe, a Unix socket, etc.).
+//
+// WriteFrame calls are serialized. Their contexts preserve caller values, but
+// cancellation follows the connection lifetime: canceling one RPC must not
+// interrupt an in-flight frame on the shared transport. Implementations must
+// return when that connection context ends. A write error terminates the mux.
 type FrameConn interface {
 	WriteFrame(ctx context.Context, f *transport.Frame) error
 	ReadFrame(ctx context.Context) (*transport.Frame, error)

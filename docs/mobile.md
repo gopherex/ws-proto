@@ -61,6 +61,8 @@ cancelling the call discards messages waiting for send credit and pending half-c
 
 Cancellation resets the individual RPC. A received reset cancels the Go
 handler's context immediately, even if the handler is not reading messages.
+Go serializes physical writes under the connection lifetime so cancellation of
+one RPC does not interrupt a WebSocket frame or disconnect sibling calls.
 A deadline sets `ws-timeout-ms` on
 `OPEN` and arms a local timeout. Go handlers returning context cancellation or
 deadline errors, including wrapped errors, produce `Canceled` or

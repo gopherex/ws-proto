@@ -120,7 +120,10 @@ func TestEndWriteFailureTerminatesStream(t *testing.T) {
 	conn.blockWrites.Store(true)
 	require.NoError(t, conn.Close())
 	// No mux read loop: write failure itself must trigger stream cleanup.
-	m := &Mux{ctx: context.Background(), conn: conn}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	m := &Mux{ctx: ctx, cancel: cancel, conn: conn, writeCh: make(chan writeRequest)}
+	go m.frameWriter()
 	s := newStream(m.ctx, m, 1, "/t/Sync", defaultInitialWindow)
 	defer s.cancel()
 	require.ErrorIs(t, s.end(&Status{Code: codes.Unavailable}, nil), errBlockClosed)

@@ -83,6 +83,13 @@ messages still waiting for send credit. Go serializes `CloseSend` with an active
 waiting for credit. If the server has already ended the call, `CloseSend` is a
 no-op and `Recv` drains queued responses before reporting the terminal status.
 
+A peer reset cancels the Go handler's context immediately. Canceling one RPC
+does not cancel an in-flight write to the shared WebSocket: the connection owns
+physical writes, while the RPC can stop waiting for one. Already-admitted
+frames may finish after cancellation; cancellation does not undo server work.
+Queued writes honor their caller's cancellation before admission, and a physical
+write failure terminates the connection and wakes its pending callers.
+
 The **receive backlog** is a **backstop** bounded by **bytes**, aligned with the
 window: a misbehaving peer that ignores the window can't grow memory without
 limit — its stream is reset with `ResourceExhausted` — while a well-behaved peer
