@@ -1,8 +1,8 @@
 name: Release
 
-# Triggered by pushing a vX.Y.Z tag (see `make release`). Builds the
-# protoc-gen-go-ws plugin binaries for every platform and publishes both npm
-# packages to GitHub Packages, all gated on a green CI run.
+# Triggered by pushing a vX.Y.Z tag (see `make release`). Builds the Go, Swift
+# and Kotlin protoc plugins and publishes npm and Maven packages to GitHub
+# Packages, all gated on a green CI run. SwiftPM consumes the same Git tag.
 on:
   push:
     tags:
@@ -62,31 +62,55 @@ jobs:
         with:
           go-version: "1.25"
           cache-dependency-path: go.sum
-      - name: Build protoc-gen-go-ws
+      - name: Build protoc plugins
         run: |
-          out="protoc-gen-go-ws"
-          if [ "$GOOS" = "windows" ]; then out="protoc-gen-go-ws.exe"; fi
-          CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o "dist/$out" ./cmd/protoc-gen-go-ws
+          for plugin in protoc-gen-go-ws protoc-gen-ws-swift protoc-gen-ws-kotlin; do
+            out="$plugin"
+            if [ "$GOOS" = "windows" ]; then out="$plugin.exe"; fi
+            CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o "dist/$out" "./cmd/$plugin"
+          done
       - name: Archive
-        id: archive
         run: |
-          base="protoc-gen-go-ws_${TAG}_${GOOS}_${GOARCH}"
           cd dist
-          if [ "$GOOS" = "windows" ]; then
-            zip "../${base}.zip" protoc-gen-go-ws.exe
-            echo "asset=${base}.zip" >> "$GITHUB_OUTPUT"
-          else
-            tar -czf "../${base}.tar.gz" protoc-gen-go-ws
-            echo "asset=${base}.tar.gz" >> "$GITHUB_OUTPUT"
-          fi
+          for plugin in protoc-gen-go-ws protoc-gen-ws-swift protoc-gen-ws-kotlin; do
+            base="${plugin}_${TAG}_${GOOS}_${GOARCH}"
+            if [ "$GOOS" = "windows" ]; then
+              zip "../${base}.zip" "$plugin.exe"
+            else
+              tar -czf "../${base}.tar.gz" "$plugin"
+            fi
+          done
       - name: Upload to release
         env:
           GH_TOKEN: ${{ github.token }}
-          ASSET: ${{ steps.archive.outputs.asset }}
-        run: gh release upload "$TAG" "$ASSET" --clobber
+        run: |
+          shopt -s nullglob
+          assets=(protoc-gen-*_${TAG}_${GOOS}_${GOARCH}.tar.gz protoc-gen-*_${TAG}_${GOOS}_${GOARCH}.zip)
+          gh release upload "$TAG" "${assets[@]}" --clobber
+
+  kotlin:
+    needs: create-release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Publish Kotlin to GitHub Packages
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: >-
+          packages/ws-proto-kotlin/gradlew -p packages/ws-proto-kotlin
+          --no-daemon -PreleaseVersion="${TAG#v}" publish
 
   npm:
-    needs: ci
+    needs: create-release
     runs-on: ubuntu-latest
     permissions:
       contents: read

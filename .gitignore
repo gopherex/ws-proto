@@ -41,3 +41,8 @@ packages/protoc-gen-ws-es/test/gen/
 
 # JetBrains IDE
 .idea/
+
+# Swift Package Manager / Xcode
+/.build/
+/.swiftpm/
+/DerivedData/

@@ -63,3 +63,42 @@ jobs:
         # Runs after test so the generated client under test/gen exists.
         run: npm run --workspaces typecheck
 
+  swift:
+    name: Swift (unit, Go interoperability, iOS build)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.25"
+          cache-dependency-path: go.sum
+      - name: Test Swift against Go
+        run: scripts/with-mobile-server.sh swift test
+      - name: Build for iOS Simulator
+        run: >-
+          xcodebuild -scheme WsProto -destination 'generic/platform=iOS Simulator'
+          -derivedDataPath DerivedData CODE_SIGNING_ALLOWED=NO build
+
+  kotlin:
+    name: Kotlin (unit, Go interoperability, Maven publication)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.25"
+          cache-dependency-path: go.sum
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Test Kotlin against Go and assemble publication
+        run: >-
+          scripts/with-mobile-server.sh packages/ws-proto-kotlin/gradlew
+          -p packages/ws-proto-kotlin --no-daemon check publishToMavenLocal
+      - name: Compile and dex Android consumer
+        run: >-
+          packages/ws-proto-kotlin/gradlew -p tests/android-consumer
+          --no-daemon assembleDebug
+

@@ -7,15 +7,18 @@ ROOT_MODULE := github.com/gopherex/ws-proto
 # path), which we don't support yet — keep releases on v0/v1.
 MAX_MAJOR := 1
 
-.PHONY: help gen build-gen gen-example fmt test test-ts release
+.PHONY: help gen build-gen gen-example fmt test test-ts test-swift test-kotlin test-android release
 
 help:
 	@echo "make gen          - regenerate transport/*.pb.go via easyp"
-	@echo "make build-gen    - build the protoc-gen-go-ws plugin into bin/"
+	@echo "make build-gen    - build Go, Swift and Kotlin protoc plugins into bin/"
 	@echo "make gen-example  - regenerate the golden example/"
 	@echo "make test         - gofmt check + go vet + go test ./..."
 	@echo "make test-ts      - build + test the npm workspaces"
-	@echo "make release      - interactive tag-driven release (Go module + npm packages share one version)"
+	@echo "make test-swift   - Swift tests against the Go interoperability server"
+	@echo "make test-kotlin  - Kotlin tests against the Go interoperability server"
+	@echo "make test-android - compile and dex the Android consumer (Android SDK required)"
+	@echo "make release      - interactive tag-driven release (all packages share one version)"
 
 # --- codegen / build ---------------------------------------------------------
 
@@ -25,6 +28,8 @@ gen:
 
 build-gen:
 	go build -o bin/protoc-gen-go-ws ./cmd/protoc-gen-go-ws
+	go build -o bin/protoc-gen-ws-swift ./cmd/protoc-gen-ws-swift
+	go build -o bin/protoc-gen-ws-kotlin ./cmd/protoc-gen-ws-kotlin
 
 gen-example: build-gen
 	cd example && PATH="$(CURDIR)/bin:$$PATH" easyp generate
@@ -44,11 +49,21 @@ test-ts:
 	npm run -ws build
 	npm run -ws test
 
+test-swift:
+	scripts/with-mobile-server.sh swift test
+
+test-kotlin:
+	scripts/with-mobile-server.sh packages/ws-proto-kotlin/gradlew -p packages/ws-proto-kotlin --no-daemon check
+
+test-android:
+	packages/ws-proto-kotlin/gradlew -p tests/android-consumer --no-daemon assembleDebug
+
 # --- release -----------------------------------------------------------------
 # One version drives everything: the Go module is tagged vX.Y.Z, both npm
 # packages (@gopherex/ws-proto-transport, @gopherex/protoc-gen-ws-es) are
 # bumped to the same X.Y.Z. Pushing the tag triggers .github/workflows/release.yml, which
-# builds the Go plugin binaries and publishes the npm packages to GitHub Packages.
+# builds the protoc plugin binaries and publishes npm/Maven packages to GitHub Packages.
+# SwiftPM uses the same tag, and the Kotlin publication receives the tag version.
 release:
 	@set -euo pipefail
 	cd "$$(git rev-parse --show-toplevel)"
@@ -96,14 +111,14 @@ release:
 	  echo
 	  echo "Release v$$new — will:"
 	  echo "  - set npm version $$new in both packages (+ lockfile)"
-	  echo "  - commit 'release v$$new'"
+	  echo "  - commit 'chore(release): publish v$$new'"
 	  echo "  - create tag v$$new and push HEAD + tag (triggers CI release)"
 	  read -r -p "Type 'yes' to proceed: " ok
 	  [ "$$ok" = "yes" ] || { echo "Aborted."; exit 0; }
 
 	  set_npm_version "$$new"
 	  git add -A
-	  git diff --cached --quiet || git commit -m "release v$$new"
+	  git diff --cached --quiet || git commit -m "chore(release): publish v$$new"
 	  git tag -a "v$$new" -m "v$$new"
 	  git push origin HEAD
 	  git push origin "v$$new"

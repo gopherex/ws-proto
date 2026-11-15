@@ -5,7 +5,7 @@ A WebSocket transport for protobuf RPC services — the WebSocket analog of gRPC
 number of concurrent RPC streams (unary, server-streaming, client-streaming,
 bidi) using a small protobuf framing envelope.
 
-It ships two code generators and two runtimes:
+It ships code generators and runtimes for Go, TypeScript, Swift and Kotlin:
 
 | Unit | Language | Analog | Provides |
 |---|---|---|---|
@@ -13,9 +13,15 @@ It ships two code generators and two runtimes:
 | `@gopherex/protoc-gen-ws-es` | TypeScript (`@bufbuild/protoplugin`) | `protoc-gen-connect-es` | `*_ws_pb.ts`: typed service client |
 | `wsrpc` (Go module) | Go | grpc-go / connect runtime | mux, framing, HTTP-upgrade server, dial client |
 | `@gopherex/ws-proto-transport` | TypeScript | connect-web transport | mux, framing, browser/node client |
+| `protoc-gen-ws-swift` + `WsProto` | Swift | native iOS/macOS client | typed clients, async RPCs, URLSession WebSocket transport |
+| `protoc-gen-ws-kotlin` + `ws-proto-kotlin` | Kotlin | native Android/JVM client | typed clients, coroutine/Flow RPCs, OkHttp WebSocket transport |
 
 The ES generator interoperates with [`protoc-gen-es`](https://github.com/bufbuild/protobuf-es)
 v2 output (it imports the generated `*_pb.ts` message types and schemas).
+
+Mobile installation and code generation: [Swift](packages/ws-proto-swift/README.md),
+[Kotlin](packages/ws-proto-kotlin/README.md), and the shared
+[mobile protocol and distribution contract](docs/mobile.md).
 
 ---
 
@@ -67,6 +73,15 @@ a well-behaved sender can't overrun a slow receiver:
   client), or `initialWindow` (TS `WsTransportOptions`); `n <= 0` keeps the
   default. Mixing a windowed peer with a non-windowed one can stall a sender once
   the initial window is exhausted, so ship both sides together.
+
+Closing the request side preserves ordering: `HALF_CLOSE` follows every accepted
+request `MSG`, including messages still waiting for send credit. Repeated closes
+do not send duplicate frames. Once the request side is closed, no additional
+messages are accepted; cancellation or a terminal response discards any unsent
+messages still waiting for send credit. Go serializes `CloseSend` with an active `Send` and returns
+`io.ErrClosedPipe` for sends after `CloseSend`. Cancellation wakes a sender
+waiting for credit. If the server has already ended the call, `CloseSend` is a
+no-op and `Recv` drains queued responses before reporting the terminal status.
 
 The **receive backlog** is a **backstop** bounded by **bytes**, aligned with the
 window: a misbehaving peer that ignores the window can't grow memory without
@@ -813,6 +828,8 @@ location /rpc {
 make help          # list targets
 make test          # gofmt + go vet + go test -race
 make test-ts       # build + test the npm workspaces
+make test-swift    # Swift tests against the Go interoperability server
+make test-kotlin   # Kotlin tests against the Go interoperability server
 make gen           # regenerate transport/*.pb.go
 make gen-example   # rebuild the plugin and regenerate the golden example/
 make release       # interactive, tag-driven release (Go module + npm share one version)
@@ -824,8 +841,10 @@ workspace `packages/*`.
 Pushing a `vX.Y.Z` tag (produced by `make release`) triggers
 `.github/workflows/release.yml`: it gates on CI, checks the npm package
 version matches the tag, builds the `protoc-gen-go-ws` binaries for all
-platforms and attaches them to a GitHub Release, and publishes both npm
-packages to GitHub Packages.
+platforms and attaches them to a GitHub Release alongside `protoc-gen-ws-swift`
+and `protoc-gen-ws-kotlin`. It publishes both npm packages and the Kotlin Maven
+artifact to GitHub Packages. Swift Package Manager consumes the root
+`Package.swift` directly from the same Git tag.
 
 ---
 
