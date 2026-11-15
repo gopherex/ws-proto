@@ -16,6 +16,13 @@ collection and cancellation. Flow failures become domain events before crossing
 the Swift boundary because SKIE cannot propagate arbitrary Kotlin exceptions
 from Flow. `CancellationException` is rethrown; cancellation must reach the RPC.
 
+Swift 6 requires Flow elements crossing into `MainActor` to be `Sendable`.
+The consumer declares this explicitly for `WatchEvent`, a final Kotlin data class
+containing only immutable integers and a string. Objective-C export cannot
+express that guarantee, so this one conformance uses `@unchecked Sendable`;
+adding mutable state requires revisiting it. Transport and facade objects do not
+receive this conformance.
+
 From the repository root on macOS with Xcode, an installed iOS Simulator runtime,
 JDK 17 and Go 1.25:
 

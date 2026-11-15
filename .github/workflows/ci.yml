@@ -130,9 +130,11 @@ jobs:
       - name: Link application framework for iOS devices
         run: gradle -p tests/kmp-consumer --no-daemon linkDebugFrameworkIosArm64
       - name: Test shared runtime on iOS Simulator against Go
+        if: ${{ !cancelled() }}
         run: >-
           scripts/with-ios-simulator.sh scripts/with-mobile-server.sh gradle
           -p packages/ws-proto-kotlin --no-daemon iosSimulatorArm64Test
       - name: Assemble all KMP publications
+        if: ${{ !cancelled() }}
         run: gradle -p packages/ws-proto-kotlin --no-daemon publishToMavenLocal
 
