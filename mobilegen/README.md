@@ -37,11 +37,12 @@ mapped proto file. Well-known protobuf types use the `SwiftProtobuf` module
 automatically. `--ws-swift_opt=Visibility=Internal` changes client visibility;
 the default is `Public`. Match visibility with the official message generator.
 
-For Kotlin, generate the Java-lite message types and Kotlin RPC clients:
+For Kotlin Multiplatform, generate immutable message models with the Square Wire
+5.4.0 Gradle plugin (`kotlin {}` output), then generate RPC clients into a
+Kotlin source directory:
 
 ```sh
 protoc -I example \
-  --java_out=lite:generated \
   --ws-kotlin_out=generated \
   proto/echo/v1/echo.proto
 ```
@@ -51,11 +52,18 @@ Unary and client-streaming methods are suspend functions returning the response
 message. Server and bidirectional streaming return cold `Flow<Message>` values;
 each collection starts its own call. Client and bidirectional request streams
 are `Flow<Message>` values. `CallOptions` carries metadata, deadlines and response
-header/trailer callbacks; coroutine cancellation cancels the call. Java message
-types follow `java_package`, `java_multiple_files`, `java_outer_classname` and
-nested-message options. Kotlin references are escaped to support keyword names.
-Names that cannot be emitted by the Java message generator (for example a
-message named `class`) are rejected with a diagnostic.
+header/trailer callbacks; coroutine cancellation cancels the call. Models use
+Wire `ADAPTER` codecs on every platform. Packages follow `wire.wire_package`,
+then `java_package`, then the proto package; nested messages stay nested.
+`java_multiple_files` and `java_outer_classname` have no effect. References escape
+Kotlin keywords, including message names such as `class`.
+
+Wire well-known types use their built-in representations and adapters: `Empty`
+is `Unit`, timestamp/duration use Wire time types, and wrappers/JSON values can
+be nullable. Keep Wire model generation at its default immutable setting;
+`mutableTypes` and custom type remapping are not supported by this RPC plugin.
+See [the Kotlin runtime setup](../packages/ws-proto-kotlin/README.md) for Gradle
+source generation and platform dependencies.
 
 RPC method names lowercase the first character and otherwise preserve spelling.
 Swift constructor names `init`, `deinit` and `self` receive the suffix `RPC` on

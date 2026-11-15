@@ -1,0 +1,16 @@
+syntax = "proto3";
+package wiretest;
+option java_package = "wiretest.when";
+option java_outer_classname = "IgnoredOuter";
+
+message class {
+  enum State {
+    UNKNOWN = 0;
+    READY = 1;
+  }
+  optional string text = 1;
+  State state = 2;
+}
+service PresenceService {
+  rpc Echo(class) returns (class);
+}

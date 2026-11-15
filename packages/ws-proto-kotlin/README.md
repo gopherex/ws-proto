@@ -1,10 +1,13 @@
-# ws-proto Kotlin
+# ws-proto Kotlin Multiplatform
 
-Android/JVM client for `wsrpc.v1`, using OkHttp, protobuf Java lite and Kotlin
-coroutines. One WebSocket carries concurrent unary, server-streaming,
-client-streaming and bidirectional RPCs. The module builds a regular JAR;
-Android does not need JNI or an embedded Go runtime. JVM builds require JDK 17+;
-the Android consumer targets API 26+.
+A shared `commonMain` client for `wsrpc.v1`. Wire handles protobuf, Ktor handles
+WebSockets, and Kotlin coroutines expose suspend calls and `Flow`. The same
+multiplexer, deadlines, cancellation, flow control, interceptors and reconnect
+controller run on JVM/Android and Kotlin/Native iOS. JVM uses Ktor's OkHttp
+engine; iOS uses Darwin. No JNI or embedded Go runtime is required.
+
+Published targets are JVM (JDK 17 bytecode), `iosArm64`, `iosSimulatorArm64` and
+`iosX64`. Android applications consume the JVM variant and target API 26+.
 
 ## Install
 
@@ -78,7 +81,8 @@ service definitions.
 import io.gopherex.wsproto.CallOptions
 import io.gopherex.wsproto.WsTransport
 import io.gopherex.wsproto.WsTransportOptions
-import echo.v1.Echo
+import echo.v1.UnaryRequest
+import echo.v1.BidiRequest
 import echo.v1.EchoServiceClient
 import kotlinx.coroutines.flow.flowOf
 
@@ -90,10 +94,10 @@ val client = EchoServiceClient(transport)
 
 // In a coroutine:
 val reply = client.unary(
-    Echo.UnaryRequest.newBuilder().setName("Kotlin").build(),
+    UnaryRequest(name = "Kotlin"),
     CallOptions(headers = mapOf("authorization" to "Bearer $token"), timeoutMs = 5_000),
 )
-client.bidi(flowOf(Echo.BidiRequest.newBuilder().setText("hello").build()))
+client.bidi(flowOf(BidiRequest(text = "hello")))
     .collect { response -> consume(response.echo) }
 
 // When the connection owner is disposed:
@@ -142,9 +146,11 @@ caps inbound frames before decoding. Both peers must use the same initial
 window because the protocol does not negotiate it.
 
 An injected `CoroutineScope` owns the transport's background work. An injected
-`OkHttpSocketFactory(client)` uses the supplied client's TLS, proxy and networking
-configuration; closing the transport closes its socket but does not shut down
-the shared client. `WsSocketFactory` is also the test seam for deterministic
+`KtorSocketFactory(client)` uses a supplied `HttpClient` with Ktor's `WebSockets`
+plugin installed. The client owns TLS, proxy and networking configuration.
+Closing a transport closes its socket but not the supplied client. The default
+factory shares one process-lifetime client per platform. The socket writer
+bounds queued frames to 16 MiB by default and preserves message order. `WsSocketFactory` is also the test seam for deterministic
 connection and framing tests. Mobile lifecycle integration is explicit: call
 pause/resume from the application's lifecycle owner as appropriate.
 
@@ -153,19 +159,31 @@ pause/resume from the application's lifecycle owner as appropriate.
 From the repository root:
 
 ```sh
-./packages/ws-proto-kotlin/gradlew -p packages/ws-proto-kotlin test
-./scripts/with-mobile-server.sh ./packages/ws-proto-kotlin/gradlew -p packages/ws-proto-kotlin test --rerun-tasks
+./packages/ws-proto-kotlin/gradlew -p packages/ws-proto-kotlin jvmTest
+./scripts/with-mobile-server.sh ./packages/ws-proto-kotlin/gradlew -p packages/ws-proto-kotlin jvmTest --rerun-tasks
 ./packages/ws-proto-kotlin/gradlew -p packages/ws-proto-kotlin publishToMavenLocal
 ```
 
-The build generates wire messages from `transport/transport.proto`, and test
-messages/clients from the existing Echo schema. Unit tests exercise framing,
+On an Apple Silicon Mac, run the same common tests with the Darwin engine:
+
+```sh
+./scripts/with-ios-simulator.sh ./scripts/with-mobile-server.sh ./packages/ws-proto-kotlin/gradlew -p packages/ws-proto-kotlin iosSimulatorArm64Test
+```
+
+The build generates Wire messages from `transport/transport.proto`, and test
+messages/clients from Echo plus naming, optional-presence and well-known-type
+fixtures. All runtime tests live in `commonTest`. Unit tests exercise framing,
 credit, terminal events, concurrency, cancellation, metadata, interceptors and
-reconnect controls. Integration tests run when `WS_PROTO_TEST_URL` is set; the
-launcher builds a real Go server and supplies that variable. They cover all four
+reconnect controls. Integration tests require `WS_PROTO_TEST_URL`; the launcher builds a real Go
+server and supplies that variable. For unit-only JVM runs use
+`jvmTest --tests '*TransportTest' --tests '*LifecycleTest' --tests '*TypedCallsTest' --tests '*ProtobufTest'`.
+Simulator execution receives the endpoint through `SIMCTL_CHILD_WS_PROTO_TEST_URL`
+and uses `WS_PROTO_IOS_DEVICE` when a simulator UDID is supplied. They cover all four
 generated RPC methods, concurrent calls, large messages, flow-controlled input,
 error details, deadlines and early server termination with an idle input source.
 
 `-PreleaseVersion=X.Y.Z` selects the published version. Without it the build uses
 the workspace version with a `-SNAPSHOT` suffix. GitHub Actions supplies
-`GITHUB_ACTOR` and `GITHUB_TOKEN` for `publish`.
+`GITHUB_ACTOR` and `GITHUB_TOKEN` for `publish`. Publish from macOS so all Apple
+klibs and the JVM variant are available together. The root KMP coordinate carries
+Gradle metadata selecting `ws-proto-kotlin-jvm` or the appropriate Apple artifact.

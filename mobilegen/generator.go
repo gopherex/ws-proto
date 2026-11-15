@@ -1,5 +1,5 @@
 // Package mobilegen generates native Swift and Kotlin clients for ws-proto.
-// Message serialization stays with the official protobuf generators.
+// Message serialization stays with SwiftProtobuf and Square Wire.
 package mobilegen
 
 import (
@@ -79,20 +79,24 @@ func generate(request *pluginpb.CodeGeneratorRequest, language Language) ([]*plu
 	if err != nil {
 		return nil, fmt.Errorf("resolve protobuf descriptors: %w", err)
 	}
+	var names kotlinNames
+	if language == Kotlin {
+		names, err = resolveKotlinNames(registry)
+		if err != nil {
+			return nil, err
+		}
+	}
 	var generated []*pluginpb.CodeGeneratorResponse_File
 	seen := make(map[string]bool)
 	symbols := make(map[string]string)
 	registry.RangeFiles(func(file protoreflect.FileDescriptor) bool {
-		if language == Kotlin {
-			symbols[javaPackage(file)+"."+javaOuter(file)] = file.Path()
-		}
 		for i := 0; i < file.Messages().Len(); i++ {
 			message := file.Messages().Get(i)
 			key := ""
 			if language == Swift {
 				key = options.modules[file.Path()] + "." + swiftMessageName(swiftPrefix(file)+string(message.Name()))
-			} else if fileOptions(file).GetJavaMultipleFiles() {
-				key = javaPackage(file) + "." + string(message.Name())
+			} else {
+				key = names[file.Path()] + "." + string(message.Name())
 			}
 			if key != "" {
 				symbols[key] = string(message.FullName())
@@ -102,8 +106,8 @@ func generate(request *pluginpb.CodeGeneratorRequest, language Language) ([]*plu
 			enum := file.Enums().Get(i)
 			if language == Swift {
 				symbols[options.modules[file.Path()]+"."+swiftPrefix(file)+string(enum.Name())] = string(enum.FullName())
-			} else if fileOptions(file).GetJavaMultipleFiles() {
-				symbols[javaPackage(file)+"."+string(enum.Name())] = string(enum.FullName())
+			} else {
+				symbols[names[file.Path()]+"."+string(enum.Name())] = string(enum.FullName())
 			}
 		}
 		return true
@@ -128,7 +132,7 @@ func generate(request *pluginpb.CodeGeneratorRequest, language Language) ([]*plu
 			if err := validateService(service); err != nil {
 				return nil, err
 			}
-			key := javaPackage(file) + "." + string(service.Name()) + "Client"
+			key := names[file.Path()] + "." + string(service.Name()) + "Client"
 			if language == Swift {
 				key = options.modules[file.Path()] + "." + swiftPrefix(file) + string(service.Name()) + "Client"
 			}
@@ -136,16 +140,6 @@ func generate(request *pluginpb.CodeGeneratorRequest, language Language) ([]*plu
 				return nil, fmt.Errorf("client name collision %q between %s and %s", key, prior, service.FullName())
 			}
 			symbols[key] = string(service.FullName())
-			if language == Kotlin {
-				for j := 0; j < service.Methods().Len(); j++ {
-					method := service.Methods().Get(j)
-					for _, message := range []protoreflect.MessageDescriptor{method.Input(), method.Output()} {
-						if !validJavaMessage(message) {
-							return nil, fmt.Errorf("%s: message %s cannot be generated as a Java type; check reserved identifiers, java_package and java_outer_classname", message.ParentFile().Path(), message.FullName())
-						}
-					}
-				}
-			}
 		}
 		if language == Swift {
 			content, err := generateSwift(file, options)
@@ -156,11 +150,8 @@ func generate(request *pluginpb.CodeGeneratorRequest, language Language) ([]*plu
 		} else {
 			for i := 0; i < file.Services().Len(); i++ {
 				service := file.Services().Get(i)
-				filename := path.Join(strings.ReplaceAll(javaPackage(file), ".", "/"), string(service.Name())+"Client.kt")
-				if !validPackage(javaPackage(file)) {
-					return nil, fmt.Errorf("invalid java_package in %s", name)
-				}
-				generated = append(generated, output(filename, generateKotlin(service)))
+				filename := path.Join(strings.ReplaceAll(names[file.Path()], ".", "/"), string(service.Name())+"Client.kt")
+				generated = append(generated, output(filename, generateKotlin(service, names)))
 			}
 		}
 	}

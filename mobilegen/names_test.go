@@ -18,12 +18,12 @@ func TestMessageNames(t *testing.T) {
 		file          *descriptorpb.FileDescriptorProto
 		swift, kotlin string
 	}{
-		{"default", namingFile("api.v1", nil), "Api_V1_Outer.TypeMessage", "`api`.`v1`.`Names`.`Outer`.`Type`"},
-		{"explicit", namingFile("api.v1", &descriptorpb.FileOptions{SwiftPrefix: proto.String("RPC"), JavaPackage: proto.String("com.example"), JavaOuterClassname: proto.String("Messages")}), "RPCOuter.TypeMessage", "`com`.`example`.`Messages`.`Outer`.`Type`"},
+		{"default", namingFile("api.v1", nil), "Api_V1_Outer.TypeMessage", "`api`.`v1`.`Outer`.`Type`"},
+		{"explicit", namingFile("api.v1", &descriptorpb.FileOptions{SwiftPrefix: proto.String("RPC"), JavaPackage: proto.String("com.example"), JavaOuterClassname: proto.String("Messages")}), "RPCOuter.TypeMessage", "`com`.`example`.`Outer`.`Type`"},
 		{"multiple", namingFile("api.v1", &descriptorpb.FileOptions{JavaMultipleFiles: proto.Bool(true)}), "Api_V1_Outer.TypeMessage", "`api`.`v1`.`Outer`.`Type`"},
-		{"empty prefix", namingFile("api.v1", &descriptorpb.FileOptions{SwiftPrefix: proto.String("")}), "Outer.TypeMessage", "`api`.`v1`.`Names`.`Outer`.`Type`"},
-		{"no package", namingFile("", nil), "Outer.TypeMessage", "`Names`.`Outer`.`Type`"},
-		{"package underscores", namingFile("foo_bar.v1", nil), "FooBar_V1_Outer.TypeMessage", "`foo_bar`.`v1`.`Names`.`Outer`.`Type`"},
+		{"empty prefix", namingFile("api.v1", &descriptorpb.FileOptions{SwiftPrefix: proto.String("")}), "Outer.TypeMessage", "`api`.`v1`.`Outer`.`Type`"},
+		{"no package", namingFile("", nil), "Outer.TypeMessage", "`Outer`.`Type`"},
+		{"package underscores", namingFile("foo_bar.v1", nil), "FooBar_V1_Outer.TypeMessage", "`foo_bar`.`v1`.`Outer`.`Type`"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
@@ -57,7 +57,7 @@ func TestSwiftSanitization(t *testing.T) {
 	}
 }
 
-func TestJavaOuterCollision(t *testing.T) {
+func TestWireIgnoresJavaOuterClass(t *testing.T) {
 	t.Parallel()
 	file := namingFile("test", nil)
 	file.MessageType[0].NestedType = append(file.MessageType[0].NestedType, &descriptorpb.DescriptorProto{Name: proto.String("Names")})
@@ -65,7 +65,7 @@ func TestJavaOuterCollision(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := javaOuter(descriptor); got != "NamesOuterClass" {
+	if got := kotlinName(descriptor.Messages().Get(0).Messages().Get(1)); got != "`test`.`Outer`.`Names`" {
 		t.Fatal(got)
 	}
 }
@@ -129,7 +129,6 @@ func TestClientNameCollision(t *testing.T) {
 			t.Parallel()
 			request := echoRequest()
 			file := request.ProtoFile[0]
-			file.Options.JavaMultipleFiles = proto.Bool(true)
 			file.MessageType = append(file.MessageType, &descriptorpb.DescriptorProto{Name: proto.String("EchoServiceClient")})
 			if response := Generate(request, language); !strings.Contains(response.GetError(), "collision") || len(response.File) != 0 {
 				t.Fatal(response)
@@ -150,13 +149,6 @@ func TestOptionsAndInvalidNames(t *testing.T) {
 		}},
 		{"invalid module", Swift, func(r *pluginpb.CodeGeneratorRequest) { r.Parameter = proto.String("Mfoo.proto=invalid.module") }},
 		{"invalid package", Kotlin, func(r *pluginpb.CodeGeneratorRequest) { r.ProtoFile[0].Options.JavaPackage = proto.String("../../bad") }},
-		{"invalid outer class", Kotlin, func(r *pluginpb.CodeGeneratorRequest) {
-			r.ProtoFile[0].Options.JavaOuterClassname = proto.String("class")
-		}},
-		{"invalid Java message", Kotlin, func(r *pluginpb.CodeGeneratorRequest) {
-			r.ProtoFile[0].MessageType[0].Name = proto.String("class")
-			r.ProtoFile[0].Service[0].Method[0].InputType = proto.String(".echo.v1.class")
-		}},
 		{"unsafe path", Swift, func(r *pluginpb.CodeGeneratorRequest) {
 			r.ProtoFile[0].Name = proto.String("../echo.proto")
 			r.FileToGenerate = []string{"../echo.proto"}

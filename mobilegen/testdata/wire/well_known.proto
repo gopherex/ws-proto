@@ -1,0 +1,32 @@
+syntax = "proto3";
+package wiretest;
+
+import "google/protobuf/any.proto";
+import "google/protobuf/empty.proto";
+import "google/protobuf/wrappers.proto";
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/duration.proto";
+import "google/protobuf/struct.proto";
+
+// Compiles every built-in RPC representation, including nullable messages.
+service WellKnownService {
+  rpc Any(google.protobuf.Any) returns (google.protobuf.Any);
+  rpc Empty(google.protobuf.Empty) returns (google.protobuf.Empty);
+  rpc Timestamp(google.protobuf.Timestamp) returns (google.protobuf.Timestamp);
+  rpc Duration(google.protobuf.Duration) returns (google.protobuf.Duration);
+  rpc Struct(google.protobuf.Struct) returns (google.protobuf.Struct);
+  rpc Value(google.protobuf.Value) returns (google.protobuf.Value);
+  rpc ListValue(google.protobuf.ListValue) returns (google.protobuf.ListValue);
+  rpc DoubleValue(google.protobuf.DoubleValue) returns (google.protobuf.DoubleValue);
+  rpc FloatValue(google.protobuf.FloatValue) returns (google.protobuf.FloatValue);
+  rpc Int64Value(google.protobuf.Int64Value) returns (google.protobuf.Int64Value);
+  rpc UInt64Value(google.protobuf.UInt64Value) returns (google.protobuf.UInt64Value);
+  rpc Int32Value(google.protobuf.Int32Value) returns (google.protobuf.Int32Value);
+  rpc UInt32Value(google.protobuf.UInt32Value) returns (google.protobuf.UInt32Value);
+  rpc BoolValue(google.protobuf.BoolValue) returns (google.protobuf.BoolValue);
+  rpc StringValue(google.protobuf.StringValue) returns (google.protobuf.StringValue);
+  rpc BytesValue(google.protobuf.BytesValue) returns (google.protobuf.BytesValue);
+  rpc NullableServer(google.protobuf.Empty) returns (stream google.protobuf.Value);
+  rpc NullableClient(stream google.protobuf.Value) returns (google.protobuf.Value);
+  rpc NullableBidi(stream google.protobuf.Value) returns (stream google.protobuf.Value);
+}

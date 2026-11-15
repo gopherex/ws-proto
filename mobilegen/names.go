@@ -1,7 +1,6 @@
 package mobilegen
 
 import (
-	"path"
 	"strings"
 	"unicode"
 
@@ -32,34 +31,6 @@ func validPackage(name string) bool {
 	return true
 }
 
-func validJavaIdentifier(name string) bool {
-	const reserved = " abstract assert boolean break byte case catch char class const continue default do double else enum extends final finally float for goto if implements import instanceof int interface long native new package private protected public return short static strictfp super switch synchronized this throw throws transient try void volatile while true false null _ var yield record sealed permits "
-	return validIdentifier(name) && !strings.Contains(reserved, " "+name+" ")
-}
-
-func validJavaMessage(message protoreflect.MessageDescriptor) bool {
-	file := message.ParentFile()
-	if !validJavaIdentifier(javaOuter(file)) {
-		return false
-	}
-	if pkg := javaPackage(file); pkg != "" {
-		for _, part := range strings.Split(pkg, ".") {
-			if !validJavaIdentifier(part) {
-				return false
-			}
-		}
-	}
-	for parent := protoreflect.Descriptor(message); parent != nil; parent = parent.Parent() {
-		switch parent := parent.(type) {
-		case protoreflect.MessageDescriptor:
-			if !validJavaIdentifier(string(parent.Name())) {
-				return false
-			}
-		}
-	}
-	return true
-}
-
 func methodName(name string) string {
 	if name == "" {
 		return name
@@ -80,63 +51,11 @@ func javaPackage(file protoreflect.FileDescriptor) string {
 	return string(file.Package())
 }
 
-func javaCamel(name string) string {
-	var result strings.Builder
-	upper := true
-	for _, c := range name {
-		switch {
-		case c >= 'a' && c <= 'z':
-			if upper {
-				c = unicode.ToUpper(c)
-			}
-			result.WriteRune(c)
-			upper = false
-		case c >= 'A' && c <= 'Z':
-			result.WriteRune(c)
-			upper = false
-		case c >= '0' && c <= '9':
-			result.WriteRune(c)
-			upper = true
-		default:
-			upper = true
-		}
-	}
-	return result.String()
-}
-
-func javaOuter(file protoreflect.FileDescriptor) string {
-	options := fileOptions(file)
-	if options.JavaOuterClassname != nil {
-		return options.GetJavaOuterClassname()
-	}
-	name := javaCamel(strings.TrimSuffix(path.Base(file.Path()), path.Ext(file.Path())))
-	if javaNameCollision(file.Messages(), file.Enums(), name) {
-		return name + "OuterClass"
-	}
-	for i := 0; i < file.Services().Len(); i++ {
-		if string(file.Services().Get(i).Name()) == name {
-			return name + "OuterClass"
-		}
-	}
-	return name
-}
-
-func javaNameCollision(messages protoreflect.MessageDescriptors, enums protoreflect.EnumDescriptors, name string) bool {
-	for i := 0; i < enums.Len(); i++ {
-		if string(enums.Get(i).Name()) == name {
-			return true
-		}
-	}
-	for i := 0; i < messages.Len(); i++ {
-		message := messages.Get(i)
-		if string(message.Name()) == name || javaNameCollision(message.Messages(), message.Enums(), name) {
-			return true
-		}
-	}
-	return false
-}
-
 func kotlinName(message protoreflect.MessageDescriptor) string {
+	return kotlinMessageName(message, javaPackage(message.ParentFile()))
+}
+
+func kotlinMessageName(message protoreflect.MessageDescriptor, pkg string) string {
 	name := string(message.Name())
 	for parent := message.Parent(); parent != nil; parent = parent.Parent() {
 		switch parent := parent.(type) {
@@ -144,11 +63,7 @@ func kotlinName(message protoreflect.MessageDescriptor) string {
 			name = string(parent.Name()) + "." + name
 		}
 	}
-	file := message.ParentFile()
-	if !fileOptions(file).GetJavaMultipleFiles() {
-		name = javaOuter(file) + "." + name
-	}
-	if pkg := javaPackage(file); pkg != "" {
+	if pkg != "" {
 		name = pkg + "." + name
 	}
 	return kotlinQualified(name)

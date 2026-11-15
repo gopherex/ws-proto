@@ -1,3 +1,3 @@
-pluginManagement { repositories { gradlePluginPortal(); mavenCentral() } }
+pluginManagement { repositories { mavenCentral(); gradlePluginPortal() } }
 dependencyResolutionManagement { repositories { mavenCentral() } }
 rootProject.name = "ws-proto-kotlin"

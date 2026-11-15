@@ -1,0 +1,6 @@
+.gradle/
+build/
+swift/.build/
+swift/.swiftpm/
+swift/KmpFixture.xcframework/
+swift/Tests/KmpConsumerTests/Endpoint.generated.swift

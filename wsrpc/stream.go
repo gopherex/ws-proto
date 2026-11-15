@@ -587,6 +587,11 @@ func (s *Stream) signalEnd(f *transport.Frame) {
 		close(s.ended)
 		s.mu.Unlock()
 		s.wakeSenders()
+		// A reset must interrupt a handler even when it is doing work outside
+		// Recv. The recorded frame still supplies the status to queued readers.
+		if f.Kind == transport.Kind_KIND_RST {
+			s.cancel()
+		}
 	})
 }
 

@@ -10,37 +10,41 @@ import kotlinx.coroutines.flow.emitAll
 
 public class `EchoServiceClient`(private val transport: io.gopherex.wsproto.WsTransport) {
 
-    private val wsMethod0 = io.gopherex.wsproto.MethodInfo<`echo`.`v1`.`Echo`.`UnaryRequest`, `echo`.`v1`.`Echo`.`UnaryResponse`>(
+    private val wsMethod0 = io.gopherex.wsproto.MethodInfo<`echo`.`v1`.`UnaryRequest`, `echo`.`v1`.`UnaryResponse`>(
         typeName = "echo.v1.EchoService", name = "Unary",
-        kind = io.gopherex.wsproto.MethodKind.UNARY, output = `echo`.`v1`.`Echo`.`UnaryResponse`.parser(),
+        kind = io.gopherex.wsproto.MethodKind.UNARY,
+        input = `echo`.`v1`.`UnaryRequest`.ADAPTER, output = `echo`.`v1`.`UnaryResponse`.ADAPTER,
     )
 
-    public suspend fun `unary`(request: `echo`.`v1`.`Echo`.`UnaryRequest`, options: io.gopherex.wsproto.CallOptions = io.gopherex.wsproto.CallOptions()): `echo`.`v1`.`Echo`.`UnaryResponse` =
+    public suspend fun `unary`(request: `echo`.`v1`.`UnaryRequest`, options: io.gopherex.wsproto.CallOptions = io.gopherex.wsproto.CallOptions()): `echo`.`v1`.`UnaryResponse` =
         transport.unary(wsMethod0, request, options).message
 
-    private val wsMethod1 = io.gopherex.wsproto.MethodInfo<`echo`.`v1`.`Echo`.`ServerStreamRequest`, `echo`.`v1`.`Echo`.`ServerStreamResponse`>(
+    private val wsMethod1 = io.gopherex.wsproto.MethodInfo<`echo`.`v1`.`ServerStreamRequest`, `echo`.`v1`.`ServerStreamResponse`>(
         typeName = "echo.v1.EchoService", name = "ServerStream",
-        kind = io.gopherex.wsproto.MethodKind.SERVER_STREAMING, output = `echo`.`v1`.`Echo`.`ServerStreamResponse`.parser(),
+        kind = io.gopherex.wsproto.MethodKind.SERVER_STREAMING,
+        input = `echo`.`v1`.`ServerStreamRequest`.ADAPTER, output = `echo`.`v1`.`ServerStreamResponse`.ADAPTER,
     )
 
-    public fun `serverStream`(request: `echo`.`v1`.`Echo`.`ServerStreamRequest`, options: io.gopherex.wsproto.CallOptions = io.gopherex.wsproto.CallOptions()): Flow<`echo`.`v1`.`Echo`.`ServerStreamResponse`> = flow {
+    public fun `serverStream`(request: `echo`.`v1`.`ServerStreamRequest`, options: io.gopherex.wsproto.CallOptions = io.gopherex.wsproto.CallOptions()): Flow<`echo`.`v1`.`ServerStreamResponse`> = flow {
         emitAll(transport.stream(wsMethod1, flowOf(request), options).message)
     }
 
-    private val wsMethod2 = io.gopherex.wsproto.MethodInfo<`echo`.`v1`.`Echo`.`ClientStreamRequest`, `echo`.`v1`.`Echo`.`ClientStreamResponse`>(
+    private val wsMethod2 = io.gopherex.wsproto.MethodInfo<`echo`.`v1`.`ClientStreamRequest`, `echo`.`v1`.`ClientStreamResponse`>(
         typeName = "echo.v1.EchoService", name = "ClientStream",
-        kind = io.gopherex.wsproto.MethodKind.CLIENT_STREAMING, output = `echo`.`v1`.`Echo`.`ClientStreamResponse`.parser(),
+        kind = io.gopherex.wsproto.MethodKind.CLIENT_STREAMING,
+        input = `echo`.`v1`.`ClientStreamRequest`.ADAPTER, output = `echo`.`v1`.`ClientStreamResponse`.ADAPTER,
     )
 
-    public suspend fun `clientStream`(requests: Flow<`echo`.`v1`.`Echo`.`ClientStreamRequest`>, options: io.gopherex.wsproto.CallOptions = io.gopherex.wsproto.CallOptions()): `echo`.`v1`.`Echo`.`ClientStreamResponse` =
+    public suspend fun `clientStream`(requests: Flow<`echo`.`v1`.`ClientStreamRequest`>, options: io.gopherex.wsproto.CallOptions = io.gopherex.wsproto.CallOptions()): `echo`.`v1`.`ClientStreamResponse` =
         io.gopherex.wsproto.firstResponse(transport.stream(wsMethod2, requests, options))
 
-    private val wsMethod3 = io.gopherex.wsproto.MethodInfo<`echo`.`v1`.`Echo`.`BidiRequest`, `echo`.`v1`.`Echo`.`BidiResponse`>(
+    private val wsMethod3 = io.gopherex.wsproto.MethodInfo<`echo`.`v1`.`BidiRequest`, `echo`.`v1`.`BidiResponse`>(
         typeName = "echo.v1.EchoService", name = "Bidi",
-        kind = io.gopherex.wsproto.MethodKind.BIDI_STREAMING, output = `echo`.`v1`.`Echo`.`BidiResponse`.parser(),
+        kind = io.gopherex.wsproto.MethodKind.BIDI_STREAMING,
+        input = `echo`.`v1`.`BidiRequest`.ADAPTER, output = `echo`.`v1`.`BidiResponse`.ADAPTER,
     )
 
-    public fun `bidi`(requests: Flow<`echo`.`v1`.`Echo`.`BidiRequest`>, options: io.gopherex.wsproto.CallOptions = io.gopherex.wsproto.CallOptions()): Flow<`echo`.`v1`.`Echo`.`BidiResponse`> = flow {
+    public fun `bidi`(requests: Flow<`echo`.`v1`.`BidiRequest`>, options: io.gopherex.wsproto.CallOptions = io.gopherex.wsproto.CallOptions()): Flow<`echo`.`v1`.`BidiResponse`> = flow {
         emitAll(transport.stream(wsMethod3, requests, options).message)
     }
 }

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http/httptest"
 	"strings"
@@ -18,6 +19,53 @@ import (
 	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 )
+
+func TestCancellationProbe(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name    string
+		method  string
+		request proto.Message
+	}{
+		{"unary", "/echo.v1.EchoService/Unary", &echov1.UnaryRequest{Name: "!wait"}},
+		{"flow", "/echo.v1.EchoService/ServerStream", &echov1.ServerStreamRequest{Count: -1}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			server := httptest.NewServer(newHandler())
+			defer server.Close()
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+			connection, _, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(server.URL, "http"), &websocket.DialOptions{Subprotocols: []string{wsrpc.Subprotocol}})
+			require.NoError(t, err)
+			defer connection.CloseNow()
+			send := func(frame *transport.Frame) {
+				data, err := proto.Marshal(frame)
+				require.NoError(t, err)
+				require.NoError(t, connection.Write(ctx, websocket.MessageBinary, data))
+			}
+			probe := func() map[string]bool {
+				response, err := server.Client().Get(server.URL + "/probe?id=cancel-test")
+				require.NoError(t, err)
+				defer response.Body.Close()
+				require.Equal(t, 200, response.StatusCode)
+				var state map[string]bool
+				require.NoError(t, json.NewDecoder(response.Body).Decode(&state))
+				return state
+			}
+			require.False(t, probe()["started"])
+			payload, err := proto.Marshal(test.request)
+			require.NoError(t, err)
+			send(&transport.Frame{StreamId: 1, Kind: transport.Kind_KIND_OPEN, Method: test.method, Headers: map[string]string{"x-probe-id": "cancel-test"}})
+			send(&transport.Frame{StreamId: 1, Kind: transport.Kind_KIND_MSG, Payload: payload})
+			send(&transport.Frame{StreamId: 1, Kind: transport.Kind_KIND_HALF_CLOSE})
+			require.Eventually(t, func() bool { return probe()["started"] }, time.Second, time.Millisecond)
+			require.False(t, probe()["finished"])
+			send(&transport.Frame{StreamId: 1, Kind: transport.Kind_KIND_RST, Status: &transport.Status{Code: int32(codes.Canceled)}})
+			require.Eventually(t, func() bool { state := probe(); return state["finished"] && state["cancelled"] }, time.Second, time.Millisecond)
+		})
+	}
+}
 
 func TestMobileFixture(t *testing.T) {
 	t.Parallel()

@@ -9,7 +9,7 @@ on:
       verify_tag:
         description: Existing release tag to verify without republishing
         required: true
-        default: v1.10.0
+        default: v1.11.0
   push:
     tags:
       - "v*"
@@ -97,38 +97,35 @@ jobs:
 
   kotlin:
     needs: create-release
-    runs-on: ubuntu-latest
+    runs-on: macos-15
     permissions:
       contents: read
       packages: write
     steps:
       - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.25"
+          cache-dependency-path: go.sum
       - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: "17"
       - uses: gradle/actions/setup-gradle@v4
-      - name: Publish Kotlin to GitHub Packages
+      - name: Publish all Kotlin Multiplatform targets to GitHub Packages
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.ref_name }}
         run: >-
           packages/ws-proto-kotlin/gradlew -p packages/ws-proto-kotlin
           --no-daemon -PreleaseVersion="${TAG#v}" publish
-      - name: Verify published Maven artifacts
+      - name: Install published KMP package and test Swift consumer
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.ref_name }}
         run: |
-          version="${TAG#v}"
-          base="https://maven.pkg.github.com/gopherex/ws-proto/io/gopherex/ws-proto-kotlin/$version/ws-proto-kotlin-$version"
-          mkdir -p "$RUNNER_TEMP/maven-download"
-          for extension in pom jar; do
-            curl --fail --silent --show-error --retry 5 --retry-all-errors \
-              --location --user "$GITHUB_ACTOR:$GITHUB_TOKEN" "$base.$extension" \
-              --output "$RUNNER_TEMP/maven-download/library.$extension"
-          done
-          jar tf "$RUNNER_TEMP/maven-download/library.jar" | grep 'io/gopherex/wsproto/WsTransport.class' > /dev/null
+          export WS_PROTO_VERSION="${TAG#v}"
+          scripts/with-mobile-server.sh scripts/test-kmp-swift.sh
 
   npm:
     needs: create-release
@@ -168,15 +165,42 @@ jobs:
           node --input-type=module -e 'await import("@gopherex/ws-proto-transport")'
           test -x node_modules/.bin/protoc-gen-ws-es
 
+  verify-android:
+    needs: kotlin
+    if: always() && (needs.kotlin.result == 'success' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Install published JVM variant and build Android APK
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.verify_tag || github.ref_name }}
+        run: |
+          export WS_PROTO_VERSION="${TAG#v}"
+          packages/ws-proto-kotlin/gradlew -p tests/android-consumer --no-daemon assembleDebug
+
   verify-existing:
     if: github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
+    runs-on: macos-15
     permissions:
       contents: read
       packages: read
     env:
       TAG: ${{ inputs.verify_tag }}
     steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.25"
+          cache-dependency-path: go.sum
       - uses: actions/setup-java@v6
         with:
           distribution: temurin
@@ -186,20 +210,15 @@ jobs:
           node-version: "22"
           registry-url: "https://npm.pkg.github.com"
           scope: "@gopherex"
-      - name: Download and inspect published Maven artifacts
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Install published KMP package and test Swift consumer
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
-          version="${TAG#v}"
-          base="https://maven.pkg.github.com/gopherex/ws-proto/io/gopherex/ws-proto-kotlin/$version/ws-proto-kotlin-$version"
-          for extension in pom jar; do
-            curl --fail --location --silent --show-error --retry 5 --retry-all-errors \
-              --user "$GITHUB_ACTOR:$GITHUB_TOKEN" "$base.$extension" \
-              --output "$RUNNER_TEMP/library.$extension"
-          done
-          jar tf "$RUNNER_TEMP/library.jar" | grep 'io/gopherex/wsproto/WsTransport.class' > /dev/null
+          export WS_PROTO_VERSION="${TAG#v}"
+          scripts/with-mobile-server.sh scripts/test-kmp-swift.sh
       - name: Install published npm packages
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

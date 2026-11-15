@@ -19,5 +19,7 @@ android {
 }
 
 dependencies {
-    implementation("io.gopherex:ws-proto-kotlin:1.0")
+    val wsProtoVersion = providers.gradleProperty("wsProtoVersion")
+        .orElse(providers.environmentVariable("WS_PROTO_VERSION")).getOrElse("1.0")
+    implementation("io.gopherex:ws-proto-kotlin:$wsProtoVersion")
 }

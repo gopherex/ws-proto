@@ -7,7 +7,7 @@ ROOT_MODULE := github.com/gopherex/ws-proto
 # path), which we don't support yet — keep releases on v0/v1.
 MAX_MAJOR := 1
 
-.PHONY: help gen build-gen gen-example fmt test test-ts test-swift test-kotlin test-android release
+.PHONY: help gen build-gen gen-example fmt test test-ts test-swift test-kotlin test-kotlin-ios test-kmp-swift test-android release
 
 help:
 	@echo "make gen          - regenerate transport/*.pb.go via easyp"
@@ -17,6 +17,8 @@ help:
 	@echo "make test-ts      - build + test the npm workspaces"
 	@echo "make test-swift   - Swift tests against the Go interoperability server"
 	@echo "make test-kotlin  - Kotlin tests against the Go interoperability server"
+	@echo "make test-kotlin-ios - shared Kotlin tests on iOS Simulator (macOS)"
+	@echo "make test-kmp-swift - Swift/SKIE consumer against Go (macOS)"
 	@echo "make test-android - compile and dex the Android consumer (Android SDK required)"
 	@echo "make release      - interactive tag-driven release (all packages share one version)"
 
@@ -53,7 +55,13 @@ test-swift:
 	scripts/with-mobile-server.sh swift test
 
 test-kotlin:
-	scripts/with-mobile-server.sh packages/ws-proto-kotlin/gradlew -p packages/ws-proto-kotlin --no-daemon check
+	scripts/with-mobile-server.sh packages/ws-proto-kotlin/gradlew -p packages/ws-proto-kotlin --no-daemon jvmTest
+
+test-kotlin-ios:
+	scripts/with-ios-simulator.sh scripts/with-mobile-server.sh packages/ws-proto-kotlin/gradlew -p packages/ws-proto-kotlin --no-daemon iosSimulatorArm64Test
+
+test-kmp-swift:
+	scripts/with-mobile-server.sh scripts/test-kmp-swift.sh
 
 test-android:
 	packages/ws-proto-kotlin/gradlew -p tests/android-consumer --no-daemon assembleDebug

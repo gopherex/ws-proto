@@ -6,6 +6,27 @@ the standard protobuf generators produce messages and the ws-proto generators
 produce clients that use the corresponding runtime. The server does not need a
 mobile-specific endpoint.
 
+## Kotlin Multiplatform
+
+The Kotlin client implements the protocol once in `commonMain`. Wire generates
+protobuf messages from the existing schemas; generated RPC clients use their
+`ProtoAdapter` instances. Ktor supplies WebSockets through OkHttp on JVM/Android
+and Darwin on iOS. The shared runtime owns stream ordering, credit, bounded
+queues, deadlines, cancellation and reconnect. Platform engines own socket I/O.
+
+An application can put its business rules and state in a KMP module, consume
+that module from Android Compose, and export it as a framework for SwiftUI.
+Apply SKIE to the application's framework module to expose `Flow` as Swift
+`AsyncSequence`. Neither SKIE nor a UI toolkit is a library dependency. Expose
+application operations and state to Swift; the application controls how much
+of its protobuf and transport API crosses that boundary.
+
+The Kotlin API uses Wire models rather than the Java-lite models used by
+version 1.10.0. Regenerate messages with Wire and RPC clients with the matching
+`protoc-gen-ws-kotlin`; Java builders and parsers are not part of this API.
+The wire protocol and the Go, TypeScript and standalone Swift clients do not
+require migration.
+
 ## Protocol contract
 
 Each connection negotiates `wsrpc.v1` and carries protobuf `Frame` messages from
@@ -26,7 +47,9 @@ credit. Receive and send backlogs are bounded by bytes. `HALF_CLOSE` is queued
 after all accepted request messages. Closing twice sends one frame; ending or
 cancelling the call discards messages waiting for send credit and pending half-close.
 
-Cancellation resets the individual RPC. A deadline sets `ws-timeout-ms` on
+Cancellation resets the individual RPC. A received reset cancels the Go
+handler's context immediately, even if the handler is not reading messages.
+A deadline sets `ws-timeout-ms` on
 `OPEN` and arms a local timeout. Go handlers returning context cancellation or
 deadline errors, including wrapped errors, produce `Canceled` or
 `DeadlineExceeded`; explicit ws-proto and gRPC statuses take precedence.
@@ -67,7 +90,7 @@ These commands require Go 1.25+. The
 [Swift guide](../packages/ws-proto-swift/README.md#generate-and-call) supplies
 `protoc-gen-swift` installation and `Visibility=Public` generation commands;
 the [Kotlin guide](../packages/ws-proto-kotlin/README.md#generate-and-call)
-uses protoc 36.2 and Java-lite messages. Both guides include the exact runtime
+uses Wire messages and the Kotlin RPC generator. Both guides include the exact runtime
 dependency and a working Echo schema download.
 
 The repository publishes its own artifacts only to GitHub. Builds still resolve
@@ -81,7 +104,7 @@ loopback port, export `WS_PROTO_TEST_URL`, run the client tests and stop the
 server. Running the native test commands directly exercises unit tests; the
 real-server cases require that environment variable.
 
-On Apple platforms these tests use the shipping URLSession socket. Linux test
+The standalone Swift client tests on Apple platforms use the shipping URLSession socket. Linux test
 runs use a Node `ws` relay to preserve WebSocket message boundaries because
 Swift 6.1 FoundationNetworking exposes libcurl chunks as complete messages;
 run `npm ci` before the Linux suite. The relay is test-only and does not ship in
@@ -100,3 +123,15 @@ CI also builds the Swift package for iOS Simulator. The Android consumer in
 `tests/android-consumer` compiles the public API and dexes its dependencies into
 an APK (`make test-android`, with Android SDK and JDK 17 installed); this
 complements JVM protocol tests but does not replace device testing.
+
+The KMP suite runs shared tests against Go on JVM and iOS Simulator. The
+`tests/kmp-consumer` application module exports a SKIE framework and Swift tests
+exercise it on the simulator. Cancellation tests start an RPC without a deadline,
+cancel its Swift task, and query the Go fixture's `/probe?id=...` endpoint to
+confirm the handler received cancellation. The `x-probe-id` header identifies
+each test call; probes exist only in the test server.
+
+Run `make test-kotlin-ios` and `make test-kmp-swift` on an Apple Silicon Mac.
+Release checks resolve the published KMP dependency from GitHub Packages and
+build the Swift framework and Android consumer without a local dependency
+substitution. A successful local JVM build alone does not verify iOS behavior.

@@ -3,12 +3,14 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"log"
 	"net"
 	"net/http"
 	"os"
+	"sync"
 	"time"
 
 	echov1 "github.com/gopherex/ws-proto/example/proto/echo/v1"
@@ -36,17 +38,59 @@ func main() {
 }
 
 func newHandler() http.Handler {
+	probes := &cancellationProbes{states: make(map[string]probeState)}
 	server := wsrpc.NewServer(wsrpc.WithSameOriginOnly())
-	server.Register("/echo.v1.EchoService/Unary", withMetadata(unary))
-	server.Register("/echo.v1.EchoService/ServerStream", withMetadata(serverStream))
+	server.Register("/echo.v1.EchoService/Unary", probes.observe(withMetadata(unary)))
+	server.Register("/echo.v1.EchoService/ServerStream", probes.observe(withMetadata(serverStream)))
 	server.Register("/echo.v1.EchoService/ClientStream", withMetadata(clientStream))
 	server.Register("/echo.v1.EchoService/Bidi", withMetadata(bidi))
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /probe", probes.serveHTTP)
 	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})
 	mux.Handle("/", server)
 	return mux
+}
+
+type probeState struct {
+	Started   bool `json:"started"`
+	Finished  bool `json:"finished"`
+	Cancelled bool `json:"cancelled"`
+}
+
+// Test-only evidence that Swift task cancellation reaches the server handler.
+type cancellationProbes struct {
+	mu     sync.Mutex
+	states map[string]probeState
+}
+
+func (p *cancellationProbes) observe(next wsrpc.Handler) wsrpc.Handler {
+	return func(ctx context.Context, stream *wsrpc.Stream) error {
+		id := stream.Header()["x-probe-id"]
+		if id == "" {
+			return next(ctx, stream)
+		}
+		p.mu.Lock()
+		p.states[id] = probeState{Started: true}
+		p.mu.Unlock()
+		defer func() {
+			p.mu.Lock()
+			p.states[id] = probeState{Started: true, Finished: true, Cancelled: errors.Is(ctx.Err(), context.Canceled)}
+			p.mu.Unlock()
+		}()
+		return next(ctx, stream)
+	}
+}
+
+func (p *cancellationProbes) serveHTTP(w http.ResponseWriter, r *http.Request) {
+	p.mu.Lock()
+	state := p.states[r.URL.Query().Get("id")]
+	p.mu.Unlock()
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(state); err != nil {
+		log.Printf("write cancellation probe: %v", err)
+	}
 }
 
 func withMetadata(next wsrpc.Handler) wsrpc.Handler {

@@ -141,20 +141,33 @@ Requires Swift 6.1+, iOS 15+ or macOS 12+. The
 [Swift installation guide](packages/ws-proto-swift/README.md#install) includes
 the message dependency and complete code-generation commands.
 
-### Kotlin / Android (GitHub Packages)
+### Kotlin Multiplatform / Android (GitHub Packages)
 
 ```kotlin
-// build.gradle.kts
-dependencies {
-    implementation("io.gopherex:ws-proto-kotlin:1.10.0")
+// Shared module build.gradle.kts
+kotlin {
+    sourceSets.commonMain.dependencies {
+        implementation("io.gopherex:ws-proto-kotlin:1.11.0")
+    }
 }
 ```
 
 Configure the Maven repository `https://maven.pkg.github.com/gopherex/ws-proto`
 with GitHub package-read credentials as shown in the
 [Kotlin installation guide](packages/ws-proto-kotlin/README.md#install).
-GitHub requires authentication even for public Maven packages. JVM builds use
-JDK 17+; the Android consumer supports API 26+.
+GitHub requires authentication even for public Maven packages. The root
+coordinate selects the JVM or iOS variant. Android/JVM-only modules can use the
+same coordinate in their normal `dependencies` block. JVM builds use JDK 17+;
+the Android consumer supports API 26+.
+
+Wire generates Kotlin message models; Ktor uses OkHttp on Android/JVM and Darwin
+on iOS. The common runtime implements all RPC behavior. An application can export
+its KMP core to SwiftUI through a framework with SKIE, without depending on the
+standalone Swift client. See the [mobile architecture](docs/mobile.md).
+
+The Kotlin API replaces the Java-lite models from 1.10.0. Regenerate Kotlin
+messages with Wire and clients with the matching RPC generator; the Go,
+TypeScript and standalone Swift APIs keep their existing wire protocol.
 
 Install matching RPC generators with Go 1.25+:
 
@@ -872,13 +885,17 @@ make test          # gofmt + go vet + go test -race
 make test-ts       # build + test the npm workspaces
 make test-swift    # Swift tests against the Go interoperability server
 make test-kotlin   # Kotlin tests against the Go interoperability server
+make test-kotlin-ios # shared Kotlin tests on iOS Simulator (macOS)
+make test-kmp-swift # Swift AsyncSequence/cancellation through SKIE (macOS)
 make gen           # regenerate transport/*.pb.go
 make gen-example   # rebuild the plugin and regenerate the golden example/
 make release       # interactive, tag-driven release (Go module + npm share one version)
 ```
 
 Layout: Go at the root (`wsrpc`, `generator`, `cmd/`), TypeScript in the npm
-workspace `packages/*`.
+workspaces, Kotlin Multiplatform in `packages/ws-proto-kotlin`, and the standalone
+Swift package in `packages/ws-proto-swift`. `tests/kmp-consumer` exports a sample
+application framework with SKIE and exercises it from Swift on iOS Simulator.
 
 Pushing a `vX.Y.Z` tag (produced by `make release`) triggers
 `.github/workflows/release.yml`: it gates on CI, checks the npm package

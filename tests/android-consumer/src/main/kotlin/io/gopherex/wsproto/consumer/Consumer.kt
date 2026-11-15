@@ -3,10 +3,9 @@ package io.gopherex.wsproto.consumer
 import io.gopherex.wsproto.CallOptions
 import io.gopherex.wsproto.MethodInfo
 import io.gopherex.wsproto.WsTransport
-import com.google.protobuf.MessageLite
 
 /** Compiles the public suspend API through Android's compiler and dex pipeline. */
-suspend fun <I : MessageLite, O : MessageLite> call(
+suspend fun <I, O> call(
     transport: WsTransport,
     method: MethodInfo<I, O>,
     request: I,
