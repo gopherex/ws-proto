@@ -11,12 +11,7 @@ final class InteropTests: XCTestCase {
   }
   private enum ProbeFailure: Error { case timeout }
 
-  private func facade() -> EchoFacade {
-    let facade = makeEchoFacade(url: fixtureEndpoint)
-    addTeardownBlock { facade.close() }
-    return facade
-  }
-
+  @MainActor
   private func waitForProbe(_ id: String, until predicate: (Probe) -> Bool) async throws {
     var url = URLComponents(string: fixtureEndpoint)!
     url.scheme = "http"
@@ -40,14 +35,16 @@ final class InteropTests: XCTestCase {
 
   @MainActor
   func testSuspendFunctionRunsRealRPC() async throws {
-    let facade = facade()
+    let facade = makeEchoFacade(url: fixtureEndpoint)
+    defer { facade.close() }
     let greeting = try await facade.greet(name: "SKIE")
     XCTAssertEqual(greeting, "hello SKIE")
   }
 
   @MainActor
   func testFlowIsTypedSwiftAsyncSequence() async {
-    let facade = facade()
+    let facade = makeEchoFacade(url: fixtureEndpoint)
+    defer { facade.close() }
     var indexes: [Int] = []
     for await event in facade.watch(count: 5, probeId: UUID().uuidString) {
       XCTAssertEqual(event.errorCode, 0)
@@ -58,7 +55,8 @@ final class InteropTests: XCTestCase {
 
   @MainActor
   func testFlowFailureArrivesAsDomainData() async {
-    let facade = facade()
+    let facade = makeEchoFacade(url: fixtureEndpoint)
+    defer { facade.close() }
     var errors: [String] = []
     for await event in facade.rejectedWatch() {
       XCTAssertEqual(event.errorCode, 3)
@@ -69,7 +67,8 @@ final class InteropTests: XCTestCase {
 
   @MainActor
   func testSwiftTaskCancellationReachesSuspendingRPCOnServer() async throws {
-    let facade = facade()
+    let facade = makeEchoFacade(url: fixtureEndpoint)
+    defer { facade.close() }
     let id = UUID().uuidString
     let completed = expectation(description: "SKIE suspend call returns after task cancellation")
     let task = Task {
@@ -84,13 +83,15 @@ final class InteropTests: XCTestCase {
     defer { task.cancel() }
     try await waitForProbe(id) { $0.started && !$0.finished }
     task.cancel()
-    await fulfillment(of: [completed], timeout: 5)
+    let completion = await XCTWaiter.fulfillment(of: [completed], timeout: 5)
+    XCTAssertEqual(completion, .completed)
     try await waitForProbe(id) { $0.finished && $0.cancelled }
   }
 
   @MainActor
   func testSwiftTaskCancellationReachesFlowRPCOnServer() async throws {
-    let facade = facade()
+    let facade = makeEchoFacade(url: fixtureEndpoint)
+    defer { facade.close() }
     let id = UUID().uuidString
     let completed = expectation(description: "SKIE AsyncSequence ends after task cancellation")
     let task = Task {
@@ -102,7 +103,8 @@ final class InteropTests: XCTestCase {
     defer { task.cancel() }
     try await waitForProbe(id) { $0.started && !$0.finished }
     task.cancel()
-    await fulfillment(of: [completed], timeout: 5)
+    let completion = await XCTWaiter.fulfillment(of: [completed], timeout: 5)
+    XCTAssertEqual(completion, .completed)
     try await waitForProbe(id) { $0.finished && $0.cancelled }
   }
 }

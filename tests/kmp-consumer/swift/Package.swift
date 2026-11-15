@@ -10,5 +10,5 @@ let package = Package(
     .target(name: "KmpConsumer", dependencies: ["KmpFixture"]),
     .testTarget(name: "KmpConsumerTests", dependencies: ["KmpConsumer", "KmpFixture"]),
   ],
-  swiftLanguageModes: [.v5]
+  swiftLanguageModes: [.v6]
 )

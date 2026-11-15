@@ -120,8 +120,15 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "9.4.1"
+      - name: Cache Kotlin Native toolchain
+        uses: actions/cache@v4
+        with:
+          path: ~/.konan
+          key: konan-${{ runner.os }}-${{ runner.arch }}-2.2.21-v1
       - name: Test Swift AsyncSequence and cancellation through SKIE
         run: scripts/with-mobile-server.sh scripts/test-kmp-swift.sh
+      - name: Link application framework for iOS devices
+        run: gradle -p tests/kmp-consumer --no-daemon linkDebugFrameworkIosArm64
       - name: Test shared runtime on iOS Simulator against Go
         run: >-
           scripts/with-ios-simulator.sh scripts/with-mobile-server.sh gradle

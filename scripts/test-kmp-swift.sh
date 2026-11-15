@@ -29,14 +29,14 @@ esac
 # CI may provision the same pinned Gradle through setup-gradle, avoiding a
 # second distribution download through the Java wrapper's HTTP client.
 gradle_command=${WS_PROTO_GRADLE:-$root/packages/ws-proto-kotlin/gradlew}
-"$gradle_command" "${gradle_args[@]}" linkDebugFrameworkIosArm64 "$link_task"
+"$gradle_command" "${gradle_args[@]}" "$link_task"
 framework="$fixture/build/bin/$target/debugFramework/KmpFixture.framework"
-device_framework="$fixture/build/bin/iosArm64/debugFramework/KmpFixture.framework"
 test -d "$framework"
-test -d "$device_framework"
 # This is a generated framework owned by this fixture, never a source artifact.
 rm -rf "$fixture/swift/KmpFixture.xcframework"
-xcodebuild -create-xcframework -framework "$framework" -framework "$device_framework" -output "$fixture/swift/KmpFixture.xcframework"
+# Debug SKIE frameworks contain compiled Swift modules, not distribution
+# interfaces. This XCFramework is consumed only by this same-toolchain test.
+xcodebuild -create-xcframework -allow-internal-distribution -framework "$framework" -output "$fixture/swift/KmpFixture.xcframework"
 
 python3 - "$fixture/swift/Tests/KmpConsumerTests/Endpoint.generated.swift" <<'PY'
 import json, os, pathlib, sys, urllib.parse

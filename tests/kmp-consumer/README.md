@@ -23,8 +23,9 @@ JDK 17 and Go 1.25:
 make test-kmp-swift
 ```
 
-The launcher starts the Go test server, builds device and host-simulator framework
-slices, creates an XCFramework, and runs Swift XCTest on a temporary simulator.
+The launcher starts the Go test server, builds the host-simulator framework,
+creates an internal test XCFramework, and runs Swift 6 XCTest on a temporary
+simulator. CI separately links the application framework for iOS devices.
 It deletes only the simulator it created and stops its test server on exit.
 Tests check unary calls, typed Flow collection, error events and cancellation of
 both suspend calls and Flow collection. The cancellation checks query the Go

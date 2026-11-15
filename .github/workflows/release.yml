@@ -116,6 +116,11 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "9.4.1"
+      - name: Cache Kotlin Native toolchain
+        uses: actions/cache@v4
+        with:
+          path: ~/.konan
+          key: konan-${{ runner.os }}-${{ runner.arch }}-2.2.21-v1
       - name: Publish all Kotlin Multiplatform targets to GitHub Packages
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -130,6 +135,7 @@ jobs:
         run: |
           export WS_PROTO_VERSION="${TAG#v}"
           scripts/with-mobile-server.sh scripts/test-kmp-swift.sh
+          gradle -p tests/kmp-consumer --no-daemon -PwsProtoVersion="$WS_PROTO_VERSION" linkDebugFrameworkIosArm64
 
   npm:
     needs: create-release
@@ -218,6 +224,11 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "9.4.1"
+      - name: Cache Kotlin Native toolchain
+        uses: actions/cache@v4
+        with:
+          path: ~/.konan
+          key: konan-${{ runner.os }}-${{ runner.arch }}-2.2.21-v1
       - name: Install published KMP package and test Swift consumer
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -226,6 +237,7 @@ jobs:
           [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
           export WS_PROTO_VERSION="${TAG#v}"
           scripts/with-mobile-server.sh scripts/test-kmp-swift.sh
+          gradle -p tests/kmp-consumer --no-daemon -PwsProtoVersion="$WS_PROTO_VERSION" linkDebugFrameworkIosArm64
       - name: Install published npm packages
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
