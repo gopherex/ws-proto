@@ -247,26 +247,51 @@ func (s *Stream) SendRaw(b []byte) error {
 	return nil
 }
 
-// sendBlockErrLocked reports the error a blocked Send should return instead of
-// waiting: a recorded terminal status, a pending terminal frame, or the context
-// error. Caller holds mu.
+// sendBlockErrLocked reports the error a Send should return instead of
+// writing: the terminal outcome once the stream has ended, otherwise the
+// context error. Caller holds mu.
 func (s *Stream) sendBlockErrLocked() error {
+	select {
+	case <-s.ended:
+		return s.terminalErrLocked()
+	default:
+	}
+	// failWith records its status just before it closes ended.
 	if s.endSt != nil {
-		if s.endSt.Code != codes.OK {
+		return s.terminalErrLocked()
+	}
+	return s.ctx.Err()
+}
+
+// terminalErrLocked is the outcome of an ended stream, the one Recv reports:
+// io.EOF for a clean END, the *Status otherwise. It reads the terminal frame
+// itself, so Send reports it whether or not a receive has applied the frame
+// yet (a server that refuses at once must not look like a clean end).
+// Caller holds mu.
+func (s *Stream) terminalErrLocked() error {
+	f := s.endFrame
+	if f == nil {
+		// Frameless terminal (failWith): local end, connection drop or overflow.
+		if s.endSt != nil && s.endSt.Code != codes.OK {
 			return s.endSt
 		}
 		return io.EOF
 	}
-	// A terminal END/RST frame may have arrived (signalEnd) before applyEnd ran.
-	select {
-	case <-s.ended:
+	st := statusFromProto(f.Status)
+	switch f.Kind {
+	case transport.Kind_KIND_END:
+		if st.Code != codes.OK {
+			return st
+		}
 		return io.EOF
+	case transport.Kind_KIND_RST:
+		if st.Code == codes.OK {
+			return &Status{Code: codes.Canceled, Message: "stream reset"}
+		}
+		return st
 	default:
+		return io.EOF
 	}
-	if err := s.ctx.Err(); err != nil {
-		return err
-	}
-	return nil
 }
 
 // creditSend adds delta bytes of credit to the send window and wakes any blocked
@@ -419,35 +444,12 @@ func (s *Stream) recvEnded() ([]byte, error) {
 	s.mu.Lock()
 	f := s.endFrame
 	s.mu.Unlock()
-	if f == nil {
-		// Terminal via failWith (no frame): local end, connection drop or overflow.
-		if st := s.status(); st != nil && st.Code != codes.OK {
-			return nil, st
-		}
-		return nil, io.EOF
+	if f != nil && (f.Kind == transport.Kind_KIND_END || f.Kind == transport.Kind_KIND_RST) {
+		s.applyEnd(f) // trailers, status, wake senders, cancel
 	}
-	switch f.Kind {
-	case transport.Kind_KIND_END:
-		st := s.applyEnd(f)
-		if st.Code != codes.OK {
-			return nil, st
-		}
-		return nil, io.EOF
-	case transport.Kind_KIND_RST:
-		st := s.applyEnd(f)
-		if st.Code == codes.OK {
-			st = &Status{Code: codes.Canceled, Message: "stream reset"}
-		}
-		return nil, st
-	default:
-		return nil, io.EOF
-	}
-}
-
-func (s *Stream) status() *Status {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.endSt
+	return nil, s.terminalErrLocked()
 }
 
 // CloseSend signals the client is done sending (HALF_CLOSE). It waits for an

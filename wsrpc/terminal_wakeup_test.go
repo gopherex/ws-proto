@@ -8,6 +8,7 @@ import (
 	"testing/synctest"
 
 	"github.com/gopherex/ws-proto/transport"
+	"google.golang.org/grpc/codes"
 )
 
 func TestTerminalFrameWakesBlockedSenders(t *testing.T) {
@@ -58,9 +59,15 @@ func TestTerminalFrameWakesBlockedSenders(t *testing.T) {
 						synctest.Wait()
 						return
 					}
+					// The send reports Recv's outcome: a clean END is io.EOF, a
+					// reset without a status is Canceled.
 					for range count {
-						if err := <-results; !errors.Is(err, io.EOF) {
+						err := <-results
+						if kind == transport.Kind_KIND_END && !errors.Is(err, io.EOF) {
 							t.Errorf("terminal send error: got %v, want EOF", err)
+						}
+						if kind == transport.Kind_KIND_RST && FromError(err).Code != codes.Canceled {
+							t.Errorf("terminal send error: got %v, want Canceled", err)
 						}
 					}
 				})

@@ -10,6 +10,7 @@ import (
 
 	"github.com/gopherex/ws-proto/transport"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 )
 
@@ -111,7 +112,14 @@ func TestTerminalWinsOverReturnedCredit(t *testing.T) {
 				stream.endOne.Do(func() { close(stream.ended) })
 				stream.sendCond.Broadcast()
 				stream.mu.Unlock()
-				require.ErrorIs(t, <-done, io.EOF)
+				// The send reports Recv's outcome: io.EOF for a clean END,
+				// Canceled for a reset without a status.
+				sendErr := <-done
+				if kind == transport.Kind_KIND_END {
+					require.ErrorIs(t, sendErr, io.EOF)
+				} else {
+					require.Equal(t, codes.Canceled, FromError(sendErr).Code)
+				}
 				select {
 				case frame := <-peer.in:
 					t.Fatalf("unexpected frame after terminal status: %s", frame.GetKind())
