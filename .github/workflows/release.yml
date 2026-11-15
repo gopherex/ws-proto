@@ -4,6 +4,12 @@ name: Release
 # and Kotlin protoc plugins and publishes npm and Maven packages to GitHub
 # Packages, all gated on a green CI run. SwiftPM consumes the same Git tag.
 on:
+  workflow_dispatch:
+    inputs:
+      verify_tag:
+        description: Existing release tag to verify without republishing
+        required: true
+        default: v1.10.0
   push:
     tags:
       - "v*"
@@ -14,6 +20,7 @@ permissions:
 jobs:
   # Releases must build green: reuse the full CI suite.
   ci:
+    if: github.event_name != 'workflow_dispatch'
     uses: ./.github/workflows/ci.yml
 
   create-release:
@@ -118,7 +125,7 @@ jobs:
           mkdir -p "$RUNNER_TEMP/maven-download"
           for extension in pom jar; do
             curl --fail --silent --show-error --retry 5 --retry-all-errors \
-              --user "$GITHUB_ACTOR:$GITHUB_TOKEN" "$base.$extension" \
+              --location --user "$GITHUB_ACTOR:$GITHUB_TOKEN" "$base.$extension" \
               --output "$RUNNER_TEMP/maven-download/library.$extension"
           done
           jar tf "$RUNNER_TEMP/maven-download/library.jar" | grep 'io/gopherex/wsproto/WsTransport.class' > /dev/null
@@ -156,6 +163,50 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/npm-download"
           cd "$RUNNER_TEMP/npm-download"
+          npm init -y
+          npm install --ignore-scripts "@gopherex/ws-proto-transport@${TAG#v}" "@gopherex/protoc-gen-ws-es@${TAG#v}"
+          node --input-type=module -e 'await import("@gopherex/ws-proto-transport")'
+          test -x node_modules/.bin/protoc-gen-ws-es
+
+  verify-existing:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    env:
+      TAG: ${{ inputs.verify_tag }}
+    steps:
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          registry-url: "https://npm.pkg.github.com"
+          scope: "@gopherex"
+      - name: Download and inspect published Maven artifacts
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          version="${TAG#v}"
+          base="https://maven.pkg.github.com/gopherex/ws-proto/io/gopherex/ws-proto-kotlin/$version/ws-proto-kotlin-$version"
+          for extension in pom jar; do
+            curl --fail --location --silent --show-error --retry 5 --retry-all-errors \
+              --user "$GITHUB_ACTOR:$GITHUB_TOKEN" "$base.$extension" \
+              --output "$RUNNER_TEMP/library.$extension"
+          done
+          jar tf "$RUNNER_TEMP/library.jar" | grep 'io/gopherex/wsproto/WsTransport.class' > /dev/null
+      - name: Install published npm packages
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cd "$RUNNER_TEMP"
+          mkdir npm-download
+          cd npm-download
           npm init -y
           npm install --ignore-scripts "@gopherex/ws-proto-transport@${TAG#v}" "@gopherex/protoc-gen-ws-es@${TAG#v}"
           node --input-type=module -e 'await import("@gopherex/ws-proto-transport")'
