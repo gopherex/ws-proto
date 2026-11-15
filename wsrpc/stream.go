@@ -24,6 +24,9 @@ type Stream struct {
 	// ws-timeout-ms header (server side); nil when no per-stream deadline.
 	deadlineCancel context.CancelFunc
 
+	// sendMu orders MSG writes and HALF_CLOSE, including sends waiting for credit.
+	// The read loop only uses mu, so it can return credit while a send waits.
+	sendMu   sync.Mutex
 	mu       sync.Mutex
 	header   map[string]string // leading headers (OPEN on server; KIND_HEADER on client); guarded by mu
 	trailer  map[string]string // END trailers (client receive-side); guarded by mu
@@ -191,9 +194,29 @@ func (s *Stream) Send(msg proto.Message) error {
 // frames without knowing the message types; the bytes MUST be a valid marshaled
 // protobuf message for the peer's decoder.
 func (s *Stream) SendRaw(b []byte) error {
+	s.sendMu.Lock()
+	defer s.sendMu.Unlock()
 	n := len(b)
 
 	s.mu.Lock()
+	if s.sendDone {
+		s.mu.Unlock()
+		return io.ErrClosedPipe
+	}
+	if err := s.sendBlockErrLocked(); err != nil {
+		s.mu.Unlock()
+		return err
+	}
+	if s.sendWindow <= 0 {
+		// Cond.Wait does not observe context cancellation by itself. Taking mu
+		// in the callback prevents a lost wake between checking ctx and Wait.
+		stop := context.AfterFunc(s.ctx, func() {
+			s.mu.Lock()
+			defer s.mu.Unlock()
+			s.sendCond.Broadcast()
+		})
+		defer stop()
+	}
 	for s.sendWindow <= 0 {
 		// Surface a terminal status / context cancellation rather than blocking
 		// forever when the stream has ended or the caller's ctx is done.
@@ -202,6 +225,12 @@ func (s *Stream) SendRaw(b []byte) error {
 			return err
 		}
 		s.sendCond.Wait()
+	}
+	// Credit and a terminal frame can arrive before this waiter reacquires mu.
+	// Positive credit must not allow a write after END/RST or cancellation.
+	if err := s.sendBlockErrLocked(); err != nil {
+		s.mu.Unlock()
+		return err
 	}
 	s.sendWindow -= n // may go negative for an oversized message; intentional
 	s.msgSent = true
@@ -421,12 +450,34 @@ func (s *Stream) status() *Status {
 	return s.endSt
 }
 
-// CloseSend signals the client is done sending (HALF_CLOSE).
+// CloseSend signals the client is done sending (HALF_CLOSE). It waits for an
+// active Send/SendRaw, including one blocked on flow-control credit, and rejects
+// later sends with io.ErrClosedPipe. Cancellation still unblocks an active send.
 func (s *Stream) CloseSend() error {
+	s.sendMu.Lock()
+	defer s.sendMu.Unlock()
 	s.mu.Lock()
 	if s.sendDone {
 		s.mu.Unlock()
 		return nil
+	}
+	// A server may finish before the caller closes its request side. Preserve
+	// queued responses: Recv owns reporting END/RST, not CloseSend.
+	select {
+	case <-s.ended:
+		s.sendDone = true
+		s.mu.Unlock()
+		return nil
+	default:
+	}
+	if s.endSt != nil {
+		s.sendDone = true
+		s.mu.Unlock()
+		return nil
+	}
+	if err := s.sendBlockErrLocked(); err != nil {
+		s.mu.Unlock()
+		return err
 	}
 	s.sendDone = true
 	s.mu.Unlock()
@@ -532,8 +583,9 @@ func (s *Stream) signalEnd(f *transport.Frame) {
 	s.endOne.Do(func() {
 		s.mu.Lock()
 		s.endFrame = f
-		s.mu.Unlock()
+		// Publish the wait predicate under mu, before a sender can enter Wait.
 		close(s.ended)
+		s.mu.Unlock()
 		s.wakeSenders()
 	})
 }

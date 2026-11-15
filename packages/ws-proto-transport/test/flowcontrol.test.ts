@@ -10,6 +10,54 @@ function msgCount(sock: FakeSocket, streamId: number): number {
 }
 
 describe("flow control: send window (sender side)", () => {
+  it("sends HALF_CLOSE once, after every queued MSG even when credit arrives in batches", async () => {
+    const sock = new FakeSocket();
+    const transport = WsTransport.fromSocket(sock, { initialWindow: 4 });
+    const stream = transport.openStream("/s/Push");
+    await tick();
+    try {
+      for (let index = 0; index < 3; index++) {
+        stream.send(new Uint8Array(4).fill(index));
+      }
+      stream.closeSend();
+      stream.closeSend();
+      stream.send(new Uint8Array(4).fill(99));
+      const kinds = () => sock.sent.filter((frame) => frame.streamId === stream.id).map((frame) => frame.kind);
+      expect(kinds()).toEqual([Kind.KIND_OPEN, Kind.KIND_MSG]);
+      sock.inject({ streamId: stream.id, kind: Kind.KIND_WINDOW_UPDATE, window: 4 });
+      expect(kinds()).toEqual([Kind.KIND_OPEN, Kind.KIND_MSG, Kind.KIND_MSG]);
+      sock.inject({ streamId: stream.id, kind: Kind.KIND_WINDOW_UPDATE, window: 4 });
+      expect(kinds()).toEqual([Kind.KIND_OPEN, Kind.KIND_MSG, Kind.KIND_MSG, Kind.KIND_MSG, Kind.KIND_HALF_CLOSE]);
+      sock.inject({ streamId: stream.id, kind: Kind.KIND_WINDOW_UPDATE, window: 4 });
+      stream.closeSend();
+      expect(sock.sent.filter((frame) => frame.kind === Kind.KIND_HALF_CLOSE)).toHaveLength(1);
+    } finally {
+      transport.close();
+    }
+  });
+
+  it.each(["cancel", "end", "reset"])("discards a deferred HALF_CLOSE on %s", async (terminal) => {
+    const sock = new FakeSocket();
+    const transport = WsTransport.fromSocket(sock, { initialWindow: 4 });
+    const stream = transport.openStream("/s/Push");
+    await tick();
+    try {
+      stream.send(new Uint8Array(4));
+      stream.send(new Uint8Array(4));
+      stream.closeSend();
+      if (terminal === "cancel") {
+        stream.cancel();
+      } else {
+        sock.inject({ streamId: stream.id, kind: terminal === "end" ? Kind.KIND_END : Kind.KIND_RST });
+      }
+      sock.inject({ streamId: stream.id, kind: Kind.KIND_WINDOW_UPDATE, window: 4 });
+      expect(msgCount(sock, stream.id)).toBe(1);
+      expect(sock.sent.filter((frame) => frame.kind === Kind.KIND_HALF_CLOSE)).toHaveLength(0);
+    } finally {
+      transport.close();
+    }
+  });
+
   it("blocks (buffers) sends once the window is spent and resumes on WINDOW_UPDATE", async () => {
     const sock = new FakeSocket();
     // window holds exactly two 4-byte messages.

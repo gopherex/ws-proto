@@ -144,4 +144,42 @@ describe("TS client <-> Go wsrpc server", () => {
       transport.close();
     }
   });
+
+  it("client streaming drains credit-blocked requests before HALF_CLOSE", async () => {
+    const transport = new WsTransport(WS_URL);
+    try {
+      const client = new EchoServiceClient(transport);
+      async function* values() {
+        // 300 KiB of protobuf payload exceeds the default 256 KiB window.
+        for (let index = 0; index < 100_000; index++) {
+          yield create(ClientStreamRequestSchema, { value: 1000 });
+        }
+      }
+      const response = await client.clientStream(values(), { timeoutMs: 15_000 });
+      expect(response.sum).toBe(100_000_000);
+    } finally {
+      transport.close();
+    }
+  }, 20_000);
+
+  it("bidi drains oversized queued requests before HALF_CLOSE", async () => {
+    const transport = new WsTransport(WS_URL);
+    try {
+      const client = new EchoServiceClient(transport);
+      const text = "x".repeat(300_000);
+      async function* messages() {
+        for (let index = 0; index < 3; index++) {
+          yield create(BidiRequestSchema, { text: `${index}:${text}` });
+        }
+      }
+      let count = 0;
+      for await (const message of client.bidi(messages(), { timeoutMs: 15_000 })) {
+        expect(message.echo).toBe(`echo:${count}:${text}`);
+        count++;
+      }
+      expect(count).toBe(3);
+    } finally {
+      transport.close();
+    }
+  }, 20_000);
 });

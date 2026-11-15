@@ -6,6 +6,11 @@ clients (`protoc-gen-ws-es`) run unary and streaming RPCs over one multiplexed
 WebSocket; see the [repo README](../../README.md) for the wire model, codegen,
 usage, and interceptors.
 
+Request half-close preserves flow-control ordering: `closeSend()` waits for
+accepted messages to leave the send queue before emitting a single `HALF_CLOSE`.
+Further sends are ignored. Cancellation or a terminal response discards messages
+still waiting for send credit and the pending half-close.
+
 ## Stream teardown contract
 
 Guaranteed on **every** terminal stream event (clean END, error END, RST,

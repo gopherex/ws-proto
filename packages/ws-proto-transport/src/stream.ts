@@ -9,7 +9,7 @@ import { WsStatusError, CODE_RESOURCE_EXHAUSTED } from "./status.js";
 export interface ClientStream {
   /** send writes one request MSG frame. */
   send(payload: Uint8Array): void;
-  /** closeSend writes HALF_CLOSE: the client is done sending request messages. */
+  /** closeSend queues HALF_CLOSE after pending messages; later send() calls are ignored. */
   closeSend(): void;
   /**
    * recv resolves with the next response MSG payload, with `null` on a clean
@@ -103,6 +103,7 @@ export class StreamImpl implements ClientStream {
   private pendingCredit = 0;
 
   private sendClosed = false;
+  private halfCloseSent = false;
   private finished = false;
 
   /** Callbacks run exactly once on any terminal path (used to detach abort listeners). */
@@ -172,6 +173,10 @@ export class StreamImpl implements ClientStream {
       this.sendWindow -= payload.length;
       this.hooks.sendMsg(this.id, payload);
     }
+    if (this.sendClosed && this.outbound.length === 0 && !this.finished && !this.halfCloseSent) {
+      this.halfCloseSent = true;
+      this.hooks.halfClose(this.id);
+    }
   }
 
   /**
@@ -191,7 +196,7 @@ export class StreamImpl implements ClientStream {
       return;
     }
     this.sendClosed = true;
-    this.hooks.halfClose(this.id);
+    this.pump();
   }
 
   async recv(): Promise<Uint8Array | null> {
@@ -282,6 +287,8 @@ export class StreamImpl implements ClientStream {
 
   /** runClose invokes and clears the registered close callbacks (idempotent). */
   private runClose(): void {
+    this.outbound.length = 0;
+    this.outboundBytes = 0;
     const cbs = this.closeCbs;
     this.closeCbs = [];
     for (const cb of cbs) {
