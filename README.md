@@ -125,6 +125,48 @@ npm install @gopherex/ws-proto-transport
 npm install -D @gopherex/protoc-gen-ws-es @bufbuild/protoc-gen-es @bufbuild/buf
 ```
 
+### Swift (Swift Package Manager)
+
+In Xcode, add `https://github.com/gopherex/ws-proto.git`, choose exact version
+`1.10.0`, and add the `WsProto` product to your target. For a Swift package:
+
+```swift
+// Package.swift dependencies
+.package(url: "https://github.com/gopherex/ws-proto.git", exact: "1.10.0")
+// Target dependencies
+.product(name: "WsProto", package: "ws-proto")
+```
+
+Requires Swift 6.1+, iOS 15+ or macOS 12+. The
+[Swift installation guide](packages/ws-proto-swift/README.md#install) includes
+the message dependency and complete code-generation commands.
+
+### Kotlin / Android (GitHub Packages)
+
+```kotlin
+// build.gradle.kts
+dependencies {
+    implementation("io.gopherex:ws-proto-kotlin:1.10.0")
+}
+```
+
+Configure the Maven repository `https://maven.pkg.github.com/gopherex/ws-proto`
+with GitHub package-read credentials as shown in the
+[Kotlin installation guide](packages/ws-proto-kotlin/README.md#install).
+GitHub requires authentication even for public Maven packages. JVM builds use
+JDK 17+; the Android consumer supports API 26+.
+
+Install matching RPC generators with Go 1.25+:
+
+```sh
+go install github.com/gopherex/ws-proto/cmd/protoc-gen-ws-swift@v1.10.0
+go install github.com/gopherex/ws-proto/cmd/protoc-gen-ws-kotlin@v1.10.0
+export PATH="$(go env GOPATH)/bin:$PATH"
+```
+
+Prebuilt generators are also available in
+[GitHub Release v1.10.0](https://github.com/gopherex/ws-proto/releases/tag/v1.10.0).
+
 ---
 
 ## Define your service

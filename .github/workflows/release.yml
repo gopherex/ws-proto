@@ -108,6 +108,20 @@ jobs:
         run: >-
           packages/ws-proto-kotlin/gradlew -p packages/ws-proto-kotlin
           --no-daemon -PreleaseVersion="${TAG#v}" publish
+      - name: Verify published Maven artifacts
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          version="${TAG#v}"
+          base="https://maven.pkg.github.com/gopherex/ws-proto/io/gopherex/ws-proto-kotlin/$version/ws-proto-kotlin-$version"
+          mkdir -p "$RUNNER_TEMP/maven-download"
+          for extension in pom jar; do
+            curl --fail --silent --show-error --retry 5 --retry-all-errors \
+              --user "$GITHUB_ACTOR:$GITHUB_TOKEN" "$base.$extension" \
+              --output "$RUNNER_TEMP/maven-download/library.$extension"
+          done
+          jar tf "$RUNNER_TEMP/maven-download/library.jar" | grep 'io/gopherex/wsproto/WsTransport.class' > /dev/null
 
   npm:
     needs: create-release
@@ -135,3 +149,14 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npm publish --workspace @gopherex/protoc-gen-ws-es
+      - name: Verify published npm packages
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/npm-download"
+          cd "$RUNNER_TEMP/npm-download"
+          npm init -y
+          npm install --ignore-scripts "@gopherex/ws-proto-transport@${TAG#v}" "@gopherex/protoc-gen-ws-es@${TAG#v}"
+          node --input-type=module -e 'await import("@gopherex/ws-proto-transport")'
+          test -x node_modules/.bin/protoc-gen-ws-es

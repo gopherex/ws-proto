@@ -16,6 +16,7 @@ on the developer machine or CI; they are not application runtime credentials.
 // settings.gradle.kts
 dependencyResolutionManagement {
     repositories {
+        google()
         mavenCentral()
         maven {
             url = uri("https://maven.pkg.github.com/gopherex/ws-proto")
@@ -29,20 +30,49 @@ dependencyResolutionManagement {
 ```
 
 ```kotlin
-// build.gradle.kts — wsProtoVersion is the published GitHub release version.
-dependencies { implementation("io.gopherex:ws-proto-kotlin:$wsProtoVersion") }
+// build.gradle.kts
+dependencies {
+    implementation("io.gopherex:ws-proto-kotlin:1.10.0")
+}
 ```
 
 Use a personal access token (classic) with `read:packages` for local downloads,
-or an authorized `GITHUB_TOKEN` in Actions. Android applications also need the
-`android.permission.INTERNET` manifest permission. Use `wss://` in production.
+or an authorized `GITHUB_TOKEN` in Actions. Set `GITHUB_ACTOR` to your GitHub
+username and `GITHUB_TOKEN` to that token in your shell or CI secrets before
+running Gradle. Keep both credentials out of the repository and application.
+
+Android applications also need this permission in `AndroidManifest.xml`:
+
+```xml
+<uses-permission android:name="android.permission.INTERNET" />
+```
+
+Use `wss://` in production. Configure the application's Java/Kotlin compilation
+target to JVM 17; the library's Android consumer uses minSdk 26.
 
 ## Generate and call
 
-Generate protobuf message classes with `protoc --java_out=lite:...` and RPC
-clients with `protoc-gen-ws-kotlin`. The RPC generator consumes the same `.proto`
-descriptors and uses their Java package/outer-class options. The message runtime
-is already a transitive dependency of this library.
+Install protoc 36.2 (`protoc --version` prints `libprotoc 36.2`) and Go 1.25+.
+The library depends on protobuf-javalite 4.36.2; use its matching compiler to
+generate Java-lite messages. In your Android/JVM module directory:
+
+```sh
+go install github.com/gopherex/ws-proto/cmd/protoc-gen-ws-kotlin@v1.10.0
+export PATH="$(go env GOPATH)/bin:$PATH"
+mkdir -p src/main/proto/echo/v1 src/main/java src/main/kotlin
+curl -fsSL https://raw.githubusercontent.com/gopherex/ws-proto/v1.10.0/example/proto/echo/v1/echo.proto \
+    -o src/main/proto/echo/v1/echo.proto
+protoc -I src/main/proto \
+    --java_out=lite:src/main/java \
+    --ws-kotlin_out=src/main/kotlin \
+    echo/v1/echo.proto
+```
+
+The module must apply its Kotlin JVM or Android Kotlin plugin so it compiles
+`src/main/kotlin`. The RPC generator reads the same schema and honors its Java
+package/outer-class options. The protobuf message runtime is already a transitive
+dependency of this library. Replace the downloaded Echo schema with your own
+service definitions.
 
 ```kotlin
 import io.gopherex.wsproto.CallOptions

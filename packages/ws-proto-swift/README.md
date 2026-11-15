@@ -1,11 +1,77 @@
 # WsProto for Swift
 
 Native asynchronous protobuf RPC over a multiplexed WebSocket. Requires iOS 15+
-or macOS 12+ and Swift 6.1+. Add `https://github.com/gopherex/ws-proto` in Xcode's
-package dependencies and select a released version. The root `Package.swift`
-exports `WsProto`; SwiftProtobuf supplies protobuf message types.
+or macOS 12+ and Swift 6.1+.
+
+## Install
+
+In Xcode, add `https://github.com/gopherex/ws-proto.git` with exact version
+`1.10.0` and select the `WsProto` product. Add
+`https://github.com/apple/swift-protobuf.git` at `1.39.0` and its
+`SwiftProtobuf` product to the target that compiles your generated messages.
+
+For a standalone Swift package, use this `Package.swift`:
 
 ```swift
+// swift-tools-version: 6.1
+import PackageDescription
+
+let package = Package(
+    name: "EchoClient",
+    platforms: [.iOS(.v15), .macOS(.v12)],
+    products: [.library(name: "EchoClient", targets: ["EchoClient"])],
+    dependencies: [
+        .package(url: "https://github.com/gopherex/ws-proto.git", exact: "1.10.0"),
+        .package(url: "https://github.com/apple/swift-protobuf.git", exact: "1.39.0"),
+    ],
+    targets: [
+        .target(name: "EchoClient", dependencies: [
+            .product(name: "WsProto", package: "ws-proto"),
+            .product(name: "SwiftProtobuf", package: "swift-protobuf"),
+        ]),
+    ],
+    swiftLanguageModes: [.v6]
+)
+```
+
+## Generate and call
+
+Install `protoc` first; protoc 29.3 and SwiftProtobuf 1.39.0 generate the checked-in
+Swift fixtures. Building the RPC generator requires Go 1.25+. Build Apple's
+message generator with the same SwiftProtobuf version as the runtime:
+
+```sh
+go install github.com/gopherex/ws-proto/cmd/protoc-gen-ws-swift@v1.10.0
+mkdir -p "$HOME/.cache/ws-proto"
+git clone --depth 1 --branch 1.39.0 https://github.com/apple/swift-protobuf.git \
+    "$HOME/.cache/ws-proto/swift-protobuf-1.39.0"
+swift build --package-path "$HOME/.cache/ws-proto/swift-protobuf-1.39.0" \
+    -c release --product protoc-gen-swift
+export PATH="$HOME/.cache/ws-proto/swift-protobuf-1.39.0/.build/release:$(go env GOPATH)/bin:$PATH"
+```
+
+Run the following in the package directory containing the manifest above.
+The downloaded Echo schema supplies all four RPC shapes; replace it with your
+own schema for your application.
+
+```sh
+mkdir -p proto/echo/v1 Sources/EchoClient
+curl -fsSL https://raw.githubusercontent.com/gopherex/ws-proto/v1.10.0/example/proto/echo/v1/echo.proto \
+    -o proto/echo/v1/echo.proto
+protoc -I proto \
+    --swift_out=Visibility=Public:Sources/EchoClient \
+    --ws-swift_out=Sources/EchoClient \
+    echo/v1/echo.proto
+swift build
+```
+
+`Visibility=Public` makes message types usable by the generated public client.
+Both generated files belong in the target that depends on `WsProto` and
+`SwiftProtobuf`.
+
+```swift
+import Foundation
+import SwiftProtobuf
 import WsProto
 
 let transport = WsTransport(url: URL(string: "wss://example.com/rpc")!)
@@ -20,9 +86,10 @@ await transport.close()
 
 Generate protobuf messages with Apple's `protoc-gen-swift`, and RPC clients with
 this repository's `protoc-gen-ws-swift`. The client exposes unary, server-streaming,
-client-streaming, and bidirectional RPCs. Request streams accept any `AsyncSequence`
-of protobuf messages. Response streams support `for try await`, `headers()`,
-`trailers()`, and explicit `cancel()`. A response iterator cancels its RPC when
+client-streaming, and bidirectional RPCs. Request streams accept an
+`AsyncSequence & Sendable` of protobuf messages. Response streams support
+`for try await`, `headers()`, `trailers()`, and explicit `cancel()`.
+A response iterator cancels its RPC when
 released before completion; retain neither an unused iterator nor an abandoned
 response. Call `cancel()` explicitly if response ownership outlives iteration.
 
