@@ -98,6 +98,8 @@ jobs:
   kotlin:
     needs: create-release
     runs-on: macos-15
+    env:
+      WS_PROTO_GRADLE: gradle
     permissions:
       contents: read
       packages: write
@@ -112,12 +114,14 @@ jobs:
           distribution: temurin
           java-version: "17"
       - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "9.4.1"
       - name: Publish all Kotlin Multiplatform targets to GitHub Packages
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.ref_name }}
         run: >-
-          packages/ws-proto-kotlin/gradlew -p packages/ws-proto-kotlin
+          gradle -p packages/ws-proto-kotlin
           --no-daemon -PreleaseVersion="${TAG#v}" publish
       - name: Install published KMP package and test Swift consumer
         env:
@@ -195,6 +199,7 @@ jobs:
       packages: read
     env:
       TAG: ${{ inputs.verify_tag }}
+      WS_PROTO_GRADLE: gradle
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
@@ -211,6 +216,8 @@ jobs:
           registry-url: "https://npm.pkg.github.com"
           scope: "@gopherex"
       - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "9.4.1"
       - name: Install published KMP package and test Swift consumer
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

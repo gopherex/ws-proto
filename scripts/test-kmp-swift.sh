@@ -26,7 +26,10 @@ case $(uname -m) in
   *) echo "Unsupported simulator host architecture: $(uname -m)" >&2; exit 2 ;;
 esac
 
-"$root/packages/ws-proto-kotlin/gradlew" "${gradle_args[@]}" linkDebugFrameworkIosArm64 "$link_task"
+# CI may provision the same pinned Gradle through setup-gradle, avoiding a
+# second distribution download through the Java wrapper's HTTP client.
+gradle_command=${WS_PROTO_GRADLE:-$root/packages/ws-proto-kotlin/gradlew}
+"$gradle_command" "${gradle_args[@]}" linkDebugFrameworkIosArm64 "$link_task"
 framework="$fixture/build/bin/$target/debugFramework/KmpFixture.framework"
 device_framework="$fixture/build/bin/iosArm64/debugFramework/KmpFixture.framework"
 test -d "$framework"
