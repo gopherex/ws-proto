@@ -8,7 +8,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/coder/websocket"
 	echov1 "github.com/gopherex/ws-proto/example/proto/echo/v1"
+	"github.com/gopherex/ws-proto/transport"
 	"github.com/gopherex/ws-proto/wsrpc"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
@@ -61,6 +63,59 @@ func TestMobileFixture(t *testing.T) {
 			require.Equal(t, "request", stream.Header()["x-echo"])
 			if name != "!conn-end" {
 				require.Equal(t, "done", stream.Trailer()["x-trailer"])
+			}
+		})
+	}
+}
+
+// Read the actual wire status with a generous client deadline. A client-side
+// timeout must not mask an incorrectly encoded server-side deadline.
+func TestServerDeadlineStatusOnWire(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name    string
+		method  string
+		request proto.Message
+	}{
+		{"unary", "/echo.v1.EchoService/Unary", &echov1.UnaryRequest{Name: "!wait"}},
+		{"server streaming", "/echo.v1.EchoService/ServerStream", &echov1.ServerStreamRequest{Count: -1}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			server := httptest.NewServer(newHandler())
+			defer server.Close()
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+			connection, _, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(server.URL, "http"), &websocket.DialOptions{
+				Subprotocols: []string{wsrpc.Subprotocol},
+			})
+			require.NoError(t, err)
+			defer connection.CloseNow()
+			payload, err := proto.Marshal(test.request)
+			require.NoError(t, err)
+			for _, frame := range []*transport.Frame{
+				{StreamId: 1, Kind: transport.Kind_KIND_OPEN, Method: test.method, Headers: map[string]string{"ws-timeout-ms": "20"}},
+				{StreamId: 1, Kind: transport.Kind_KIND_MSG, Payload: payload},
+				{StreamId: 1, Kind: transport.Kind_KIND_HALF_CLOSE},
+			} {
+				data, err := proto.Marshal(frame)
+				require.NoError(t, err)
+				require.NoError(t, connection.Write(ctx, websocket.MessageBinary, data))
+			}
+			for {
+				kind, data, err := connection.Read(ctx)
+				require.NoError(t, err)
+				require.Equal(t, websocket.MessageBinary, kind)
+				frame := new(transport.Frame)
+				require.NoError(t, proto.Unmarshal(data, frame))
+				if frame.GetKind() != transport.Kind_KIND_END {
+					continue
+				}
+				require.Equal(t, uint32(1), frame.GetStreamId())
+				require.Equal(t, int32(codes.DeadlineExceeded), frame.GetStatus().GetCode())
+				require.Equal(t, context.DeadlineExceeded.Error(), frame.GetStatus().GetMessage())
+				require.Equal(t, "done", frame.GetHeaders()["x-trailer"])
+				return
 			}
 		})
 	}

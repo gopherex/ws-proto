@@ -27,7 +27,10 @@ after all accepted request messages. Closing twice sends one frame; ending or
 cancelling the call discards messages waiting for send credit and pending half-close.
 
 Cancellation resets the individual RPC. A deadline sets `ws-timeout-ms` on
-`OPEN` and arms a local timeout. Every terminal path settles response metadata
+`OPEN` and arms a local timeout. Go handlers returning context cancellation or
+deadline errors, including wrapped errors, produce `Canceled` or
+`DeadlineExceeded`; explicit ws-proto and gRPC statuses take precedence.
+Every terminal path settles response metadata
 and wakes blocked readers. Finishing a streaming response does not wait for an
 idle request producer. Breaking response iteration cancels the call.
 

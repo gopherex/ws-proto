@@ -45,7 +45,9 @@ func Errorf(c codes.Code, format string, args ...any) error {
 // FromError extracts a *Status from err. Returns nil for nil. A *Status is
 // returned as-is; a gRPC *status.Status error (e.g. status.Error, as produced
 // by gRPC server interceptors on the FromGRPC bridge) maps to its code and
-// message. Other errors map to codes.Unknown.
+// message. Context cancellation and deadline errors, including wrapped errors,
+// map to codes.Canceled and codes.DeadlineExceeded after explicit statuses.
+// Other errors map to codes.Unknown.
 func FromError(err error) *Status {
 	if err == nil {
 		return nil
@@ -63,5 +65,6 @@ func FromError(err error) *Status {
 		}
 		return &Status{Code: gs.Code(), Message: gs.Message(), Details: details}
 	}
-	return &Status{Code: codes.Unknown, Message: err.Error()}
+	contextStatus := status.FromContextError(err)
+	return &Status{Code: contextStatus.Code(), Message: contextStatus.Message()}
 }
