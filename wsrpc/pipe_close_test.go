@@ -33,6 +33,54 @@ func TestPipeDeliversQueuedFramesBeforeClose(t *testing.T) {
 	}
 }
 
+// A reader that took the nonblocking check on an empty queue, then found a
+// frame and the close both ready (the writer queued and closed in between),
+// still returns the frame before the close. awaitFrame is that second stage;
+// before the fix select chose between the two at random.
+func TestPipeAwaitPrefersQueuedFrameOverClose(t *testing.T) {
+	t.Parallel()
+	for range 200 {
+		a, b := newPipe()
+		if err := a.WriteFrame(t.Context(), &transport.Frame{StreamId: 7}); err != nil {
+			t.Fatal(err)
+		}
+		_ = a.Close()
+		f, err := b.awaitFrame(t.Context())
+		if err != nil || f.GetStreamId() != 7 {
+			t.Fatalf("got %v, %v; want the queued frame before the close", f, err)
+		}
+		if _, err := b.awaitFrame(t.Context()); !errors.Is(err, errPipeClosed) {
+			t.Fatalf("after the queued frame: %v, want errPipeClosed", err)
+		}
+	}
+}
+
+// A write after Close fails instead of queueing a frame nobody reads.
+func TestPipeWriteAfterCloseFails(t *testing.T) {
+	t.Parallel()
+	for range 200 {
+		a, b := newPipe()
+		_ = b.Close()
+		if err := a.WriteFrame(t.Context(), &transport.Frame{}); !errors.Is(err, errPipeClosed) {
+			t.Fatalf("write after close: %v, want errPipeClosed", err)
+		}
+	}
+}
+
+func BenchmarkPipeRoundTrip(b *testing.B) {
+	a, z := newPipe()
+	defer a.Close()
+	f := &transport.Frame{StreamId: 1}
+	for b.Loop() {
+		if err := a.WriteFrame(b.Context(), f); err != nil {
+			b.Fatal(err)
+		}
+		if _, err := z.ReadFrame(b.Context()); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
 // Both ends close at once, repeatedly, through the pipe and through the
 // muxes and client over it: no end panics on an already closed pipe.
 func TestPipeConcurrentClose(t *testing.T) {

@@ -46,7 +46,14 @@ func NewPipe() (FrameConn, FrameConn) {
 
 var errPipeClosed = errors.New("wsrpc: pipe closed")
 
+// WriteFrame fails once either end closed: a frame queued after the close
+// would never be read.
 func (p *pipeConn) WriteFrame(ctx context.Context, f *transport.Frame) error {
+	select {
+	case <-p.done:
+		return errPipeClosed
+	default:
+	}
 	select {
 	case p.out <- f:
 		return nil
@@ -65,11 +72,23 @@ func (p *pipeConn) ReadFrame(ctx context.Context) (*transport.Frame, error) {
 		return f, nil
 	default:
 	}
+	return p.awaitFrame(ctx)
+}
+
+// awaitFrame blocks for a frame. A frame and the close can become ready
+// together (the peer wrote, then closed, after ReadFrame found the queue
+// empty) and select picks either, so the close arm drains the queue first.
+func (p *pipeConn) awaitFrame(ctx context.Context) (*transport.Frame, error) {
 	select {
 	case f := <-p.in:
 		return f, nil
 	case <-p.done:
-		return nil, errPipeClosed
+		select {
+		case f := <-p.in:
+			return f, nil
+		default:
+			return nil, errPipeClosed
+		}
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
