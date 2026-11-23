@@ -5,6 +5,7 @@ import http from "node:http";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { once } from "node:events";
 
 const upstream = new URL(process.env.WS_PROTO_TEST_URL);
@@ -18,6 +19,24 @@ const server = http.createServer(async (req, res) => {
     for await (const part of req) result += part;
     res.end();
     resolve(result);
+    return;
+  }
+  if (req.url === "/cancelled") {
+    const probe = new URL("/probe?id=cpp-browser", upstream);
+    probe.protocol = "http:";
+    const signal = AbortSignal.timeout(5000);
+    try {
+      for (;;) {
+        const response = await fetch(probe, { signal });
+        const state = await response.json();
+        if (state.finished) {
+          assert.ok(state.started && state.cancelled, "Go handler did not observe RPC cancellation");
+          break;
+        }
+        await delay(10, undefined, { signal });
+      }
+      res.writeHead(204).end();
+    } catch (err) { res.writeHead(500).end(); reject(err); }
     return;
   }
   const file = assets.get(req.url);

@@ -34,13 +34,15 @@ public:
             const auto name = std::string(service->name()) + "Client";
             const auto qualified = std::string(service->full_name()) + "Client";
             const auto* pool = file->pool();
-            if (pool->FindMessageTypeByName(qualified) || pool->FindEnumTypeByName(qualified)
-                || pool->FindServiceByName(qualified) || pool->FindEnumValueByName(qualified)) {
-                *error = "generated C++ client name collision: " + qualified;
-                return false;
+            for (const auto& symbol : {qualified, qualified + "T"}) {
+                if (pool->FindMessageTypeByName(symbol) || pool->FindEnumTypeByName(symbol)
+                    || pool->FindServiceByName(symbol) || pool->FindEnumValueByName(symbol)) {
+                    *error = "generated C++ client name collision: " + symbol;
+                    return false;
+                }
             }
-            body << "\nclass " << name << " {\npublic:\n"
-                 << "    explicit " << name << "(::ws_proto::Session& session) : session_(session) {}\n";
+            body << "\ntemplate<class Channel>\nclass " << name << "T {\npublic:\n"
+                 << "    explicit " << name << "T(Channel& channel) : channel_(channel) {}\n";
             for (int j = 0; j < service->method_count(); ++j) {
                 const auto* method = service->method(j);
                 auto request = cpp::QualifiedClassName(method->input_type());
@@ -48,7 +50,7 @@ public:
                 for (auto* type : {method->input_type(), method->output_type()})
                     includes.insert(cpp::StripProto(type->file()->name()) + ".pb.h");
                 const auto member = "call_" + std::string(method->name());
-                if (member == name) {
+                if (member == name + "T") {
                     *error = "RPC method collides with generated constructor: " + qualified;
                     return false;
                 }
@@ -57,12 +59,13 @@ public:
                 body << "::ws_proto::Options options = {}) const {\n"
                      << "        using Rpc = ::ws_proto::Rpc<" << request << ", " << response << ", "
                      << std::boolalpha << method->client_streaming() << ", " << method->server_streaming() << ">;\n"
-                     << "        return Rpc(session_.start(\"/" << service->full_name() << "/" << method->name()
-                     << "\", std::move(options), " << !method->server_streaming() << ")";
+                     << "        return channel_.invoke(::ws_proto::Method<Rpc>{\"/" << service->full_name() << "/" << method->name()
+                     << "\"}, std::move(options)";
                 if (!method->client_streaming()) body << ", request";
                 body << ");\n    }\n";
             }
-            body << "private:\n    ::ws_proto::Session& session_;\n};\n";
+            body << "private:\n    Channel& channel_;\n};\n"
+                 << "using " << name << " = " << name << "T<::ws_proto::Session>;\n";
         }
         if (!ns.empty()) body << "} // namespace " << ns << "\n";
         std::ostringstream header;

@@ -23,6 +23,7 @@ var Module = {
         Module._free(address);
       }
     };
+    Module._start();
     const timer = setInterval(() => Module._expire(), 25);
     socket.onclose = () => {
       clearInterval(timer);

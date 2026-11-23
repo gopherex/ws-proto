@@ -14,6 +14,12 @@ EM_JS(bool, host_send, (const char* bytes, std::size_t size), {
 EM_JS(void, host_close, (), { Module.socket.close(); });
 EM_JS(void, report, (const char* result), { Module.report(UTF8ToString(result)); });
 
+EM_JS(void, verify_go_cancellation, (), {
+    fetch('/cancelled').then(response => Module._verified(Number(response.ok)), () => Module._verified(0));
+});
+static SignalSource probe_finished;
+static bool go_cancelled = false;
+
 static Session session([](std::string bytes) { return host_send(bytes.data(), bytes.size()); }, host_close);
 
 struct TestTask {
@@ -35,6 +41,8 @@ TestTask run() {
     Options options;
     options.headers["x-test"] = "web";
     auto unary = echo.call_Unary(request, options);
+    co_await unary.headers_ready();
+    CHECK(unary.headers().at("x-header") == "ready");
     auto reply = co_await unary.result();
     CHECK(reply && reply->greeting() == "hello WASM");
     CHECK(unary.headers().at("x-echo") == "web" && unary.trailers().at("x-trailer") == "done");
@@ -83,10 +91,18 @@ TestTask run() {
     CHECK(bidi_eof && !*bidi_eof);
 
     request.set_name("!wait");
-    auto cancelled = echo.call_Unary(request);
-    cancelled.cancel();
+    SignalSource stop;
+    Options tracked{.headers = {{"x-probe-id", "cpp-browser"}}, .cancellation = stop.signal()};
+    auto cancelled = echo.call_Unary(request, tracked);
+    co_await cancelled.headers_ready();
+    CHECK(cancelled.headers().at("x-header") == "ready");
+    stop.notify();
     auto cancelled_result = co_await cancelled.result();
     CHECK(!cancelled_result && cancelled_result.error().code == Code::cancelled);
+
+    verify_go_cancellation();
+    co_await probe_finished.signal();
+    CHECK(go_cancelled);
 
     options.deadline = Clock::now() + std::chrono::milliseconds(100);
     auto timeout = co_await echo.call_Unary(request, options).result();
@@ -100,9 +116,13 @@ TestTask run() {
 }
 
 extern "C" {
+void start() { run(); }
+void verified(int cancelled) {
+    go_cancelled = cancelled != 0;
+    probe_finished.notify();
+}
 void opened(int negotiated) {
     session.opened(negotiated ? "wsrpc.v1" : "");
-    run();
 }
 void message(const char* bytes, int size) { session.receive({bytes, static_cast<std::size_t>(size)}); }
 void closed() { session.disconnected(); }
