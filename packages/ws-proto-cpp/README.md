@@ -4,7 +4,7 @@ Generate protobuf messages and typed clients with EasyP. Link the runtime into a
 
 ## Install with vcpkg
 
-Use manifest mode. In the application's `vcpkg-configuration.json`, declare a Git registry of kind `git`, with repository `https://github.com/gopherex/ws-proto.git`, packages `["ws-proto", "protoc-gen-ws-cpp"]`, and a `baseline` equal to the full commit ID of the registry revision you want. The commit must contain the `versions/` directory. Keep the application's built-in registry for protobuf. The following `vcpkg.json` selects the protobuf baseline used by the interoperability test:
+Use manifest mode. Copy the [registry configuration](../../tests/cpp/registry/vcpkg-configuration.json) alongside the application's `vcpkg.json`. It selects the ports in this repository by Git commit. The following manifest selects the protobuf baseline used by the interoperability test:
 
 ```json
 {
@@ -69,3 +69,7 @@ call.close_send();
 A write accepts a request into the bounded send queue. The runtime drains admitted writes in order as credit becomes available. Repeated `close_send()` sends one half-close after those writes. An individual `cancel()` resets that RPC. Unary and client-streaming methods expose `result()`, which waits for the final status and exactly one response. Server-streaming and bidi methods expose `read()`. Inspect `headers()` for received leading metadata and `trailers()` after completion. Status details retain serialized protobuf Any messages.
 
 The Firefox consumer in [tests/cpp/browser](../../tests/cpp/browser) supplies the browser WebSocket and clock, and uses all four generated method shapes against the Go server. Run `make test-cpp` on Linux with a bootstrapped `VCPKG_ROOT`, an activated Emscripten SDK, EasyP, Go, Node 22+, Ninja, CMake and Firefox. CI pins the build tools used by this test.
+
+To run the same consumer from the installed registry ports, run `scripts/test-cpp-registry.sh`. The `--local` option reads the registry and its pinned source from the current repository's Git history, including unpublished commits.
+
+When publishing a new C++ version, commit the library and generators first. Pin both portfiles to that source commit, update their manifest versions and commit the recipes. Update the version database with `vcpkg x-add-version --all --x-builtin-ports-root=ports --x-builtin-registry-versions-dir=versions` from the repository root. Point the standalone consumer's registry baseline at the commit containing the updated database. Registry and source commits must be reachable in the published Git history.

@@ -22,6 +22,8 @@ jobs:
       CMAKE_BUILD_PARALLEL_LEVEL: 4
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
       - uses: actions/setup-go@v6
         with:
           go-version: "1.26.6"
@@ -46,6 +48,7 @@ jobs:
         run: |
           source "$RUNNER_TEMP/emsdk/emsdk_env.sh"
           make test-cpp
+          scripts/test-cpp-registry.sh --local
 
   go:
     name: Go (build, vet, test -race)

@@ -1,0 +1,11 @@
+{
+  "registries": [
+    {
+      "kind": "git",
+      "repository": "https://github.com/gopherex/ws-proto.git",
+      "reference": "master",
+      "baseline": "107b5847f51b16482c0b0d14c65f36c872bee6a4",
+      "packages": ["ws-proto", "protoc-gen-ws-cpp"]
+    }
+  ]
+}
