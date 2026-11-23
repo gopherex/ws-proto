@@ -16,6 +16,7 @@ help:
 	@echo "make test         - gofmt check + go vet + go test ./..."
 	@echo "make test-ts      - build + test the npm workspaces"
 	@echo "make test-swift   - Swift tests against the Go interoperability server"
+	@echo "make test-cpp     - native tests and WASM client in Firefox against Go"
 	@echo "make test-kotlin  - Kotlin tests against the Go interoperability server"
 	@echo "make test-kotlin-ios - shared Kotlin tests on iOS Simulator (macOS)"
 	@echo "make test-kmp-swift - Swift/SKIE consumer against Go (macOS)"
@@ -53,6 +54,10 @@ test-ts:
 
 test-swift:
 	scripts/with-mobile-server.sh swift test
+
+.PHONY: test-cpp
+test-cpp:
+	scripts/test-cpp.sh
 
 test-kotlin:
 	scripts/with-mobile-server.sh packages/ws-proto-kotlin/gradlew -p packages/ws-proto-kotlin --no-daemon jvmTest

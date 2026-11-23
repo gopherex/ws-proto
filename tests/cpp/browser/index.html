@@ -1,0 +1,35 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>ws-proto C++ interoperability</title>
+<script>
+var Module = {
+  report(result) {
+    document.title = result;
+    fetch('/result', { method: 'POST', body: result });
+  },
+  onAbort(reason) { Module.report(String(reason)); },
+  onRuntimeInitialized() {
+    const socket = new WebSocket('ws://' + location.host + '/ws', 'wsrpc.v1');
+    Module.socket = socket;
+    socket.binaryType = 'arraybuffer';
+    socket.onopen = () => Module._opened(Number(socket.protocol === 'wsrpc.v1'));
+    socket.onmessage = ({ data }) => {
+      const bytes = new Uint8Array(data);
+      const address = Module._malloc(bytes.length);
+      try {
+        Module.HEAPU8.set(bytes, address);
+        Module._message(address, bytes.length);
+      } finally {
+        Module._free(address);
+      }
+    };
+    const timer = setInterval(() => Module._expire(), 25);
+    socket.onclose = () => {
+      clearInterval(timer);
+      Module._closed();
+    };
+  }
+};
+addEventListener('error', event => Module.report(event.message));
+</script>
+<script src="echo.js"></script>

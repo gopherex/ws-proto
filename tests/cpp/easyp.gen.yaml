@@ -1,0 +1,8 @@
+version: v1
+generate:
+  paths: [proto]
+plugins:
+  - name: cpp
+    out: gen
+  - name: ws-cpp
+    out: gen
