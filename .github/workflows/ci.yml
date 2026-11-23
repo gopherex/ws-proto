@@ -40,7 +40,8 @@ jobs:
           "$RUNNER_TEMP/emsdk/emsdk" install 4.0.23
           "$RUNNER_TEMP/emsdk/emsdk" activate 4.0.23
           git init "$RUNNER_TEMP/vcpkg"
-          git -C "$RUNNER_TEMP/vcpkg" fetch --depth 1 https://github.com/microsoft/vcpkg.git 9eec002df1cd109f8f104cd966a763daf9751489
+          # Versioned installs resolve port trees from the history of this baseline.
+          git -C "$RUNNER_TEMP/vcpkg" fetch https://github.com/microsoft/vcpkg.git 9eec002df1cd109f8f104cd966a763daf9751489
           git -C "$RUNNER_TEMP/vcpkg" checkout FETCH_HEAD
           "$RUNNER_TEMP/vcpkg/bootstrap-vcpkg.sh"
           echo "VCPKG_ROOT=$RUNNER_TEMP/vcpkg" >> "$GITHUB_ENV"
