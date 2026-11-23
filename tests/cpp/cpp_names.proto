@@ -1,0 +1,14 @@
+syntax = "proto3";
+package cppnames;
+
+message std {}
+message Outer { message EchoClient {} }
+message Outer_EchoClient2T {}
+
+service Outer_Echo {
+  rpc Echo(std) returns (Outer.EchoClient);
+}
+
+service call_Ping {
+  rpc PingClientT(std) returns (std);
+}

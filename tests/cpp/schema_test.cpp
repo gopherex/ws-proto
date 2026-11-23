@@ -1,3 +1,4 @@
+#include "cpp_names.ws.pb.h"
 #include "service.ws.pb.h"
 #include "well_known.ws.pb.h"
 
@@ -14,6 +15,12 @@ static_assert(std::same_as<decltype(std::declval<Service>().call_Class(std::decl
                            ws_proto::Rpc<Request, Response, false, false>>);
 static_assert(std::same_as<decltype(std::declval<wiretest::WellKnownServiceClient>().call_Empty({})),
                            ws_proto::Rpc<google::protobuf::Empty, google::protobuf::Empty, false, false>>);
+
+static_assert(std::same_as<decltype(std::declval<cppnames::Outer_EchoClient3>().call_Echo({})),
+                           ws_proto::Rpc<cppnames::std, cppnames::Outer::EchoClient, false, false>>);
+
+static_assert(std::same_as<decltype(std::declval<cppnames::call_PingClient2>().call_PingClientT({})),
+                           ws_proto::Rpc<cppnames::std, cppnames::std, false, false>>);
 
 using namespace ws_proto;
 namespace wire = wsproto::transport::v1;
@@ -203,6 +210,7 @@ TEST_F(GeneratedClientTest, StatefulResponseInterceptorSurvivesSuccessiveReads) 
     });
     naming::api::KeywordServiceClientT client(channel);
     auto rpc = client.call_Init({});
+    rpc.map_responses({});
     for (auto expected : {"1", "2"}) {
         auto item = rpc.read().await_resume();
         ASSERT_TRUE(item && *item);
@@ -210,4 +218,57 @@ TEST_F(GeneratedClientTest, StatefulResponseInterceptorSurvivesSuccessiveReads) 
     }
     EXPECT_FALSE(*rpc.read().await_resume());
     EXPECT_TRUE(frames.empty());
+}
+
+TEST_F(GeneratedClientTest, InvalidUploadResponseCannotBeReplacedByAValidMessage) {
+    auto rpc = Service(session).call_Upload();
+    rpc.close_send();
+    deliver(wire::KIND_MSG, std::string(1, static_cast<char>(0x80)));
+    EXPECT_TRUE(rpc.finished().ready());
+    naming::api::Local good;
+    good.set_value("last");
+    deliver(wire::KIND_MSG, good.SerializeAsString());
+    deliver(wire::KIND_END);
+    auto result = rpc.result().await_resume();
+    ASSERT_FALSE(result);
+    EXPECT_EQ(result.error().code, Code::data_loss);
+    EXPECT_EQ(frames.back().kind(), wire::KIND_RST);
+}
+
+TEST_F(GeneratedClientTest, DecodeFailureRemainsTerminalWhenEndAlreadyArrived) {
+    auto rpc = Service(session).call_Init({});
+    naming::v1::StringMessage good;
+    good.set_value("valid");
+    deliver(wire::KIND_MSG, good.SerializeAsString());
+    deliver(wire::KIND_MSG, std::string(1, static_cast<char>(0x80)));
+    deliver(wire::KIND_MSG, good.SerializeAsString());
+    deliver(wire::KIND_END);
+    auto first = rpc.read().await_resume();
+    ASSERT_TRUE(first && *first);
+    EXPECT_EQ((*first)->value(), "valid");
+    for (int i = 0; i < 3; ++i) {
+        auto item = rpc.read().await_resume();
+        ASSERT_FALSE(item);
+        EXPECT_EQ(item.error().code, Code::data_loss);
+    }
+    EXPECT_EQ(frames.back().kind(), wire::KIND_HALF_CLOSE);
+}
+
+TEST_F(GeneratedClientTest, ManualAndSourceWritesShareTheSameInterceptorState) {
+    auto rpc = Service(session).call_Upload();
+    rpc.map_requests([seq = 0](naming::v1::StringMessage& request) mutable {
+        request.set_value(std::to_string(++seq));
+    });
+    rpc.map_requests({});
+    rpc.write_from([&, first = true](Signal) mutable -> ReadyItem {
+        if (!std::exchange(first, false)) return {std::nullopt};
+        EXPECT_TRUE(rpc.write({}));
+        return {naming::v1::StringMessage{}};
+    });
+    ASSERT_EQ(frames.size(), 4);
+    for (int i = 1; i <= 2; ++i) {
+        naming::v1::StringMessage request;
+        ASSERT_TRUE(request.ParseFromString(frames[i].payload()));
+        EXPECT_EQ(request.value(), std::to_string(i));
+    }
 }

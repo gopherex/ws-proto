@@ -58,14 +58,14 @@ if(WS_PROTO_BUILD_RUNTIME)
     if(WS_PROTO_BUILD_TOOLS)
       set(fixtures "${proto_root}/mobilegen/testdata")
       find_path(wkt_root google/protobuf/empty.proto REQUIRED)
-      set(schema_sources "${gen}/service.pb.cc" "${gen}/messages.pb.cc" "${gen}/well_known.pb.cc")
-      add_custom_command(OUTPUT ${schema_sources} "${gen}/service.ws.pb.h" "${gen}/well_known.ws.pb.h"
+      set(schema_sources "${gen}/service.pb.cc" "${gen}/messages.pb.cc" "${gen}/well_known.pb.cc" "${gen}/cpp_names.pb.cc")
+      add_custom_command(OUTPUT ${schema_sources} "${gen}/service.ws.pb.h" "${gen}/well_known.ws.pb.h" "${gen}/cpp_names.ws.pb.h"
         COMMAND "${CMAKE_COMMAND}" -E make_directory "${gen}"
-        COMMAND "${Protobuf_PROTOC_EXECUTABLE}" "-I${fixtures}/naming" "-I${fixtures}/wire" "-I${wkt_root}"
+        COMMAND "${Protobuf_PROTOC_EXECUTABLE}" "-I${fixtures}/naming" "-I${fixtures}/wire" "-I${proto_root}/tests/cpp" "-I${wkt_root}"
           "--cpp_out=${gen}" "--ws-cpp_out=${gen}" "--plugin=protoc-gen-ws-cpp=$<TARGET_FILE:protoc-gen-ws-cpp>"
-          service.proto messages.proto well_known.proto
+          service.proto messages.proto well_known.proto cpp_names.proto
         DEPENDS protoc-gen-ws-cpp "${fixtures}/naming/service.proto" "${fixtures}/naming/messages.proto"
-          "${fixtures}/wire/well_known.proto" VERBATIM)
+          "${fixtures}/wire/well_known.proto" "${proto_root}/tests/cpp/cpp_names.proto" VERBATIM)
       add_executable(schema_test ../../tests/cpp/schema_test.cpp ${schema_sources})
       target_compile_options(schema_test PRIVATE "$<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Werror=unused-result>")
       target_include_directories(schema_test PRIVATE "${gen}")

@@ -59,6 +59,7 @@ struct SessionEnd {
 namespace detail {
 struct Connection;
 struct Stream;
+template<class M> using MessageTransform = std::shared_ptr<const std::function<void(M&)>>;
 
 // Sending and half-closing do not own the lifetime of the RPC. In particular,
 // a coroutine feeding requests can finish while the caller still waits for END.
@@ -131,19 +132,29 @@ public:
     }
     template<class Method, class... Args>
     auto invoke(Method method, Options options, const Args&... args) {
-        return typename Method::CallType(start(method.path, std::move(options), Method::kind), args...);
+        using Rpc = typename Method::CallType;
+        if constexpr (Method::kind == MethodKind::client_streaming) {
+            auto last = std::make_shared<typename Rpc::ResponseType>();
+            auto call = start_call(method.path, std::move(options), Method::kind,
+                                   [last](const std::string& bytes) { return last->ParseFromString(bytes); });
+            return Rpc(std::move(call), std::move(last));
+        } else {
+            return Rpc(start(method.path, std::move(options), Method::kind), args...);
+        }
     }
 
 private:
+    Call start_call(std::string_view method, Options options, MethodKind kind,
+                    std::function<bool(const std::string&)> decode_upload);
     std::shared_ptr<detail::Connection> connection_;
 };
 
 template<class Message, bool Single>
 class MessageRead : public ReadOperation {
 public:
-    using Transform = std::shared_ptr<const std::function<void(Message&)>>;
-    MessageRead(std::shared_ptr<detail::Stream> stream, Transform transform)
-        : ReadOperation(std::move(stream)), transform_(std::move(transform)) {}
+    using Transform = detail::MessageTransform<Message>;
+    MessageRead(std::shared_ptr<detail::Stream> stream, Transform transform, std::shared_ptr<Message> decoded = {})
+        : ReadOperation(std::move(stream)), transform_(std::move(transform)), decoded_(std::move(decoded)) {}
     using Value = std::conditional_t<Single, Message, std::optional<Message>>;
 
     Result<Value> await_resume() {
@@ -154,7 +165,8 @@ public:
             else return std::nullopt;
         }
         Message message;
-        if (!message.ParseFromString(**bytes)) {
+        if (decoded_) message = std::move(*decoded_);
+        else if (!message.ParseFromString(**bytes)) {
             decode_failed();
             return std::unexpected(Status{Code::data_loss, "invalid protobuf response"});
         }
@@ -163,6 +175,7 @@ public:
     }
 private:
     Transform transform_;
+    std::shared_ptr<Message> decoded_;
 };
 
 template<class Request, class Response, bool ClientStreaming, bool ServerStreaming>
@@ -180,7 +193,7 @@ public:
     Result<void> write(const Request& request) requires ClientStreaming { return write_message(request); }
     void close_send() requires ClientStreaming { call_.close_send(); }
     auto read() const requires ServerStreaming { return MessageRead<Response, false>(call_.stream_, response_map_); }
-    auto result() const requires (!ServerStreaming) { return MessageRead<Response, true>(call_.stream_, response_map_); }
+    auto result() const requires (!ServerStreaming) { return MessageRead<Response, true>(call_.stream_, response_map_, last_response_); }
     void cancel() { call_.cancel(); }
     const Metadata& headers() const { return call_.headers(); }
     const Metadata& trailers() const { return call_.trailers(); }
@@ -189,9 +202,18 @@ public:
 
     // The outermost interceptor sees requests first and responses last.
     void map_requests(std::function<void(Request&)> transform) requires ClientStreaming {
-        request_map_ = compose(std::move(transform), std::move(request_map_));
+        if (!transform) return;
+        if (request_map_) {
+            auto inner = request_map_;
+            transform = [outer = std::move(transform), inner](Request& message) {
+                outer(message);
+                (*inner)(message);
+            };
+        }
+        request_map_ = std::make_shared<const std::function<void(Request&)>>(std::move(transform));
     }
     void map_responses(std::function<void(Response&)> transform) {
+        if (!transform) return;
         if (response_map_) {
             auto previous = response_map_;
             transform = [previous, next = std::move(transform)](Response& message) {
@@ -224,12 +246,9 @@ public:
     }
 
 private:
-    template<class T>
-    static std::function<void(T&)> compose(std::function<void(T&)> first, std::function<void(T&)> second) {
-        if (!first) return second;
-        if (!second) return first;
-        return [first = std::move(first), second = std::move(second)](T& value) { first(value); second(value); };
-    }
+    friend class Session;
+    Rpc(Call call, std::shared_ptr<Response> last) requires (ClientStreaming && !ServerStreaming)
+        : call_(std::move(call)), last_response_(std::move(last)) {}
     struct Producer {
         struct promise_type {
             Producer get_return_object() { return {}; }
@@ -240,7 +259,7 @@ private:
         };
     };
     template<class Next>
-    static Producer pump(std::shared_ptr<detail::Stream> stream, std::function<void(Request&)> transform, Next next) {
+    static Producer pump(std::shared_ptr<detail::Stream> stream, detail::MessageTransform<Request> transform, Next next) {
         detail::RequestSide writer(std::move(stream));
         auto stop = writer.requests_closed();
 #if defined(__cpp_exceptions)
@@ -251,7 +270,7 @@ private:
                 if (stop.ready()) break;
                 if (!item) { writer.fail(std::move(item.error())); break; }
                 if (!*item) { writer.close_send(); break; }
-                if (transform) transform(**item);
+                if (transform) (*transform)(**item);
                 if (!send_message(writer, **item)) break;
             }
 #if defined(__cpp_exceptions)
@@ -272,12 +291,13 @@ private:
     Result<void> write_message(const Request& message) {
         if (!request_map_) return send_message(call_, message);
         Request copy(message);
-        request_map_(copy);
+        (*request_map_)(copy);
         return send_message(call_, copy);
     }
     Call call_;
-    std::function<void(Request&)> request_map_;
-    typename MessageRead<Response, !ServerStreaming>::Transform response_map_;
+    std::shared_ptr<Response> last_response_;
+    detail::MessageTransform<Request> request_map_;
+    detail::MessageTransform<Response> response_map_;
 };
 
 template<class Rpc>

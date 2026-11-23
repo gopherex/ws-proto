@@ -453,3 +453,62 @@ TEST(SignalTest, MovingSubscriptionsTransfersDetachmentAndNotifyAllowsReentry) {
     source.notify();
     EXPECT_EQ(delivered, 2);
 }
+
+TEST_F(SessionTest, ReentrantHostCannotWriteAfterReset) {
+    std::optional<Call> call;
+    std::vector<wire::Kind> writes;
+    Session peer([&](std::string bytes) {
+        wire::Frame frame;
+        if (!frame.ParseFromString(bytes)) return false;
+        writes.push_back(frame.kind());
+        if (frame.kind() == wire::KIND_RST) {
+            auto sent = call->send("late");
+            EXPECT_FALSE(sent);
+            if (!sent) EXPECT_EQ(sent.error().code, Code::cancelled);
+            call->close_send();
+        }
+        return true;
+    }, [] {});
+    peer.opened("wsrpc.v1");
+    call.emplace(peer.start("/bidi", {}, false));
+    call->cancel();
+    EXPECT_EQ(writes, (std::vector<wire::Kind>{wire::KIND_OPEN, wire::KIND_RST}));
+}
+
+TEST_F(SessionTest, HandshakeBudgetIncludesCreditBlockedMessagesAcrossCalls) {
+    Limits limits{.initial_window = 1, .max_preopen_bytes = 100};
+    Session peer([](std::string) { return true; }, [] {}, limits);
+    auto a = peer.start("/a", {}, false);
+    ASSERT_TRUE(a.send("x"));  // spends its only byte of credit
+    ASSERT_TRUE(a.send(std::string(50, 'a')));
+    a.cancel();                // releases both queues from the handshake budget
+    auto b = peer.start("/b", {}, false);
+    auto c = peer.start("/c", {}, false);
+    ASSERT_TRUE(b.send("x"));
+    ASSERT_TRUE(c.send("x"));
+    ASSERT_TRUE(b.send(std::string(45, 'b')));
+    EXPECT_FALSE(c.send(std::string(45, 'c')));
+    ASSERT_TRUE(peer.end());
+    EXPECT_EQ(peer.end()->status.code, Code::unavailable);
+    EXPECT_TRUE(b.finished().ready());
+}
+
+TEST_F(SessionTest, HandshakeReleasesBudgetWhenBufferedMessagesBecomeSendable) {
+    std::vector<wire::Frame> frames;
+    Session peer([&](std::string bytes) { return frames.emplace_back().ParseFromString(bytes); }, [] {},
+                 Limits{.initial_window = 1, .max_preopen_bytes = 90});
+    auto a = peer.start("/a", {}, false);
+    ASSERT_TRUE(a.send("x"));
+    ASSERT_TRUE(a.send(std::string(40, 'a')));
+    a.close_send();
+    peer.opened("wsrpc.v1");
+    wire::Frame credit;
+    credit.set_stream_id(1);
+    credit.set_kind(wire::KIND_WINDOW_UPDATE);
+    credit.set_window(1);
+    peer.receive(credit.SerializeAsString());
+    ASSERT_EQ(frames.size(), 4);
+    EXPECT_EQ(frames[2].payload(), std::string(40, 'a'));
+    EXPECT_EQ(frames[3].kind(), wire::KIND_HALF_CLOSE);
+    EXPECT_TRUE(peer.is_open());
+}

@@ -56,7 +56,9 @@ struct Stream {
     std::optional<Status> terminal;
     std::optional<Clock::time_point> deadline;
     Metadata headers, trailers;
-    std::deque<std::string> incoming, outgoing;
+    std::function<bool(const std::string&)> decode_upload;
+    std::deque<std::string> incoming;
+    std::deque<wire::Frame> outgoing;
     std::size_t incoming_bytes = 0, outgoing_bytes = 0;
     std::int64_t credit = 0;
     std::uint32_t consumed = 0;
@@ -77,8 +79,7 @@ struct Stream {
         }
     }
 
-    void finish(Status status, bool discard) {
-        if (terminal) return;
+    void set_terminal(Status status, bool discard) {
         terminal = std::move(status);
         outgoing.clear();
         outgoing_bytes = 0;
@@ -87,10 +88,19 @@ struct Stream {
             incoming_bytes = 0;
         }
         cancellation.reset();
+    }
+
+    void notify_finished() {
         leading.notify();
         requests_closed.notify();
         finished.notify();
         wake();
+    }
+
+    void finish(Status status, bool discard) {
+        if (terminal) return;
+        set_terminal(std::move(status), discard);
+        notify_finished();
     }
 };
 
@@ -113,7 +123,7 @@ struct Connection {
     std::optional<SessionEnd> end;
     std::function<void(const SessionEnd&)> on_end;
     std::deque<wire::Frame> pending;
-    std::size_t pending_bytes = 0;
+    std::size_t pending_bytes = 0, credit_blocked_before_open = 0;
     bool flushing = false;
     std::uint64_t next_id = 1;
     std::unordered_map<std::uint32_t, std::shared_ptr<Stream>> streams;
@@ -122,7 +132,7 @@ struct Connection {
         if (end) return;
         end = SessionEnd{reason, retryable};
         pending.clear();
-        pending_bytes = 0;
+        pending_bytes = credit_blocked_before_open = 0;
         open = false;
         auto active = std::exchange(streams, {});
         if (close_host) close();
@@ -136,20 +146,24 @@ struct Connection {
         return false;
     }
 
+    bool fits_before_open(std::size_t bytes) {
+        if (bytes <= limits.max_preopen_bytes - pending_bytes - credit_blocked_before_open) return true;
+        stop({Code::unavailable, "send buffer overflow before connect"}, true);
+        return false;
+    }
+
     bool transmit(wire::Frame&& envelope) {
         if (end) return false;
         if (open && !flushing) return write(envelope);
         auto size = envelope.ByteSizeLong();
-        if (size > limits.max_preopen_bytes - pending_bytes) {
-            stop({Code::unavailable, "send buffer overflow before connect"}, true);
-            return false;
-        }
+        if (!fits_before_open(size)) return false;
         pending_bytes += size;
         pending.push_back(std::move(envelope));
         return true;
     }
 
     void flush() {
+        credit_blocked_before_open = 0;
         open = true;
         flushing = true;
         while (!pending.empty()) {
@@ -184,13 +198,18 @@ struct Connection {
                 return true;
             });
         }
+        if (!open) {
+            for (const auto& queued : stream->outgoing) credit_blocked_before_open -= queued.ByteSizeLong();
+        }
+        // A synchronous host can call back into the RPC while accepting RST.
+        stream->set_terminal(std::move(status), true);
         if (stream->opened && !end) {
             auto envelope = frame(stream->id, wire::KIND_RST);
-            envelope.mutable_status()->set_code(static_cast<int>(status.code));
-            envelope.mutable_status()->set_message(status.message);
+            envelope.mutable_status()->set_code(static_cast<int>(stream->terminal->code));
+            envelope.mutable_status()->set_message(stream->terminal->message);
             transmit(std::move(envelope));
         }
-        stream->finish(std::move(status), true);
+        stream->notify_finished();
     }
 
     void consumed(Stream& stream, std::size_t count) {
@@ -203,12 +222,10 @@ struct Connection {
 
     void pump(std::shared_ptr<Stream> stream) {
         while (!stream->terminal && stream->credit > 0 && !stream->outgoing.empty()) {
-            auto envelope = frame(stream->id, wire::KIND_MSG);
-            auto payload = std::move(stream->outgoing.front());
+            auto envelope = std::move(stream->outgoing.front());
             stream->outgoing.pop_front();
-            stream->outgoing_bytes -= payload.size();
-            stream->credit -= static_cast<std::int64_t>(payload.size());
-            envelope.set_payload(std::move(payload));
+            stream->outgoing_bytes -= envelope.payload().size();
+            stream->credit -= static_cast<std::int64_t>(envelope.payload().size());
             if (!transmit(std::move(envelope))) return;
         }
         if (!stream->terminal && stream->closing && !stream->half_closed && stream->outgoing.empty()) {
@@ -252,9 +269,15 @@ bool Session::is_open() const { return connection_->open; }
 const std::optional<SessionEnd>& Session::end() const { return connection_->end; }
 
 Call Session::start(std::string_view method, Options options, MethodKind kind) {
+    return start_call(method, std::move(options), kind, {});
+}
+
+Call Session::start_call(std::string_view method, Options options, MethodKind kind,
+                         std::function<bool(const std::string&)> decode_upload) {
     auto connection = connection_;
     auto stream = std::make_shared<detail::Stream>(kind, options);
     stream->connection = connection;
+    stream->decode_upload = std::move(decode_upload);
     if (connection->end || options.cancellation.ready()) {
         stream->finish(connection->end ? connection->end->status : Status{Code::cancelled, "cancelled"}, true);
         return Call(stream);
@@ -317,7 +340,8 @@ void Session::receive(std::string_view message) {
         stream->credit = std::min<std::int64_t>(UINT32_MAX, stream->credit + envelope.window());
         connection->pump(stream);
         return;
-    case wire::KIND_MSG:
+    case wire::KIND_MSG: {
+        auto size = envelope.payload().size();
         if (stream->kind == MethodKind::client_streaming) {
             stream->incoming.clear();
             stream->incoming_bytes = 0;
@@ -331,14 +355,23 @@ void Session::receive(std::string_view message) {
             connection->reset(stream, {Code::resource_exhausted, "receive backlog full"});
             return;
         }
-        stream->incoming_bytes += envelope.payload().size();
-        stream->incoming.push_back(std::move(*envelope.mutable_payload()));
-        // A single-response RPC consumes its one result immediately but cannot
-        // publish it until END. A second response must be able to reach us.
-        if (stream->single()) connection->consumed(*stream, stream->incoming_bytes);
+        if (stream->decode_upload) {
+            if (!stream->decode_upload(envelope.payload())) {
+                connection->reset(stream, {Code::data_loss, "invalid protobuf response"});
+                return;
+            }
+            // The typed result owns the decoded message. Keep only its presence until END.
+            stream->incoming.emplace_back();
+        } else {
+            stream->incoming_bytes += size;
+            stream->incoming.push_back(std::move(*envelope.mutable_payload()));
+        }
         stream->leading.notify();
+        // Single-result calls consume each response immediately but publish only after END.
+        if (stream->single() && !stream->terminal) connection->consumed(*stream, size);
         stream->wake();
         return;
+    }
     case wire::KIND_RST:
     case wire::KIND_END: {
         connection->streams.erase(it);
@@ -407,8 +440,15 @@ Result<void> detail::RequestSide::send(std::string payload) {
         connection->reset(stream, status);
         return std::unexpected(status);
     }
-    stream->outgoing_bytes += payload.size();
-    stream->outgoing.push_back(std::move(payload));
+    auto message = frame(stream->id, wire::KIND_MSG);
+    message.set_payload(std::move(payload));
+    if (!connection->open && stream->credit <= 0) {
+        auto size = message.ByteSizeLong();
+        if (!connection->fits_before_open(size)) return std::unexpected(connection->end->status);
+        connection->credit_blocked_before_open += size;
+    }
+    stream->outgoing_bytes += message.payload().size();
+    stream->outgoing.push_back(std::move(message));
     connection->pump(stream);
     if (stream->terminal && stream->terminal->code != Code::ok) return std::unexpected(*stream->terminal);
     return {};
@@ -481,7 +521,9 @@ Result<std::optional<std::string>> ReadOperation::await_resume() {
 }
 
 void ReadOperation::decode_failed() {
-    if (auto connection = stream_->connection.lock()) connection->reset(stream_, {Code::data_loss, "invalid protobuf response"});
+    Status error{Code::data_loss, "invalid protobuf response"};
+    if (stream_->terminal) stream_->set_terminal(std::move(error), true);
+    else if (auto connection = stream_->connection.lock()) connection->reset(stream_, std::move(error));
 }
 
 } // namespace ws_proto
