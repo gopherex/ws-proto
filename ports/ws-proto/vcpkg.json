@@ -1,7 +1,7 @@
 {
   "name": "ws-proto",
-  "version-semver": "1.12.1",
-  "description": "C++23 protobuf RPC client for a host-provided WebSocket.",
+  "version-semver": "1.13.0-dev.1",
+  "description": "C++23 protobuf RPC client and server for a host-provided WebSocket.",
   "homepage": "https://github.com/gopherex/ws-proto",
   "license": "MIT",
   "dependencies": [
@@ -17,5 +17,13 @@
       "name": "vcpkg-cmake-config",
       "host": true
     }
-  ]
+  ],
+  "features": {
+    "asio": {
+      "description": "Boost.Asio completion-token adapters for RPC reads, results and signals",
+      "dependencies": [
+        "boost-asio"
+      ]
+    }
+  }
 }
