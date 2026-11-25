@@ -119,3 +119,36 @@ TEST(Asio, ServerReadCancellationNotifiesPeerAndEndsCoroutine) {
     pipe.drain();
     EXPECT_EQ(rpc.read().await_resume().error().code, Code::cancelled);
 }
+
+TEST(Asio, SignalWaitRetainsSignalUntilSlotCancellation) {
+    net::io_context io;
+    net::cancellation_signal cancel;
+    int calls = 0;
+    {
+        SignalSource scoped;
+        wa::async_wait(io.get_executor(), scoped.signal(), net::bind_cancellation_slot(cancel.slot(),
+            [&](Result<void> r) { EXPECT_EQ(r.error().code, Code::cancelled); ++calls; }));
+    }
+    cancel.emit(net::cancellation_type::all);
+    io.run();
+    EXPECT_EQ(calls, 1);
+}
+
+TEST(Asio, RpcCancellationRequiresTerminalGuarantee) {
+    ws_proto::testing::Loopback pipe;
+    pipe.server.register_method("/live", MethodKind::bidi, [](ServerCall) {});
+    pipe.open();
+    auto rpc = pipe.client.start("/live", {}, MethodKind::bidi);
+    pipe.drain();
+    net::io_context io;
+    net::cancellation_signal cancel;
+    int calls = 0;
+    wa::async_read(io.get_executor(), rpc, net::bind_cancellation_slot(cancel.slot(),
+        [&](auto result) { EXPECT_EQ(result.error().code, Code::cancelled); ++calls; }));
+    cancel.emit(net::cancellation_type::total);
+    io.poll();
+    EXPECT_FALSE(rpc.finished().ready());
+    cancel.emit(net::cancellation_type::terminal);
+    io.run();
+    EXPECT_EQ(calls, 1);
+}

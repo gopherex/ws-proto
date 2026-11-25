@@ -112,7 +112,7 @@ auto result = co_await ws_proto::asio::async_result(unary_rpc, boost::asio::use_
 auto ready = co_await ws_proto::asio::async_wait(rpc.headers_ready(), boost::asio::use_awaitable);
 ```
 
-Results use the same `ws_proto::Result` types as the native operations, including remote status details and streaming EOF. Initiate the operation on the session loop. For a plain callback, or when its associated executor differs from the session loop, pass the session executor as the first argument. Deferred tokens need the RPC to live until initiation. Completion is posted to the handler's associated executor. Asio cancellation of a pending read or result cancels the RPC on the session loop. Cancellation of a signal wait detaches only that subscription. [Asio tests](../../tests/cpp/asio_test.cpp)
+Results use the same `ws_proto::Result` types as the native operations, including remote status details and streaming EOF. Initiate the operation on the session loop. For a plain callback, or when its associated executor differs from the session loop, pass the session executor as the first argument. Deferred tokens need the RPC to live until initiation. Completion is posted to the handler's associated executor. A terminal Asio cancellation request (including `cancellation_type::all`) cancels a pending read or result and its RPC on the session loop. Cancellation of a signal wait detaches only that subscription. [Asio tests](../../tests/cpp/asio_test.cpp)
 
 ## Intercept generated calls
 
