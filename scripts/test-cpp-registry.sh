@@ -19,6 +19,7 @@ if [[ ${1:-} == --local ]]; then
     mkdir "$X_VCPKG_REGISTRIES_CACHE"
 fi
 cp "$root"/tests/cpp/registry/*.json "$root"/tests/cpp/browser/{CMakeLists.txt,index.html,main.cpp} .
+cp "$root/tests/cpp/echo_server.hpp" .
 cp -r "$root/example/proto" "$root"/example/protobuf.{mod,lock} "$root/tests/cpp/easyp.gen.yaml" .
 "$VCPKG_ROOT/vcpkg" install --triplet wasm32-emscripten --host-triplet "$host"
 PATH="$scratch/vcpkg_installed/$host/tools/protoc-gen-ws-cpp:$PATH" easyp generate --frozen
@@ -29,3 +30,14 @@ cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release "-DECHO_GEN=$scratch/gen
     -DVCPKG_TARGET_TRIPLET=wasm32-emscripten -DVCPKG_MANIFEST_INSTALL=OFF
 cmake --build build
 "$root/scripts/with-mobile-server.sh" node "$root/tests/cpp/browser/run.mjs" "$scratch/build"
+
+# Install the adapter feature for the host and consume the exported package.
+mkdir native
+cd native
+cp "$root"/tests/cpp/registry/*.json "$root"/tests/cpp/registry/native/{CMakeLists.txt,main.cpp} .
+"$VCPKG_ROOT/vcpkg" install --triplet "$host" --host-triplet "$host" --x-feature=asio
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+    "-DCMAKE_TOOLCHAIN_FILE=$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
+    "-DVCPKG_INSTALLED_DIR=$PWD/vcpkg_installed" "-DVCPKG_TARGET_TRIPLET=$host" -DVCPKG_MANIFEST_INSTALL=OFF
+cmake --build build
+./build/consumer

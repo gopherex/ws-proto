@@ -15,7 +15,7 @@ It ships code generators and runtimes for Go, TypeScript, Swift, Kotlin and C++:
 | `@gopherex/ws-proto-transport` | TypeScript | connect-web transport | mux, framing, browser/node client |
 | `protoc-gen-ws-swift` + `WsProto` | Swift | native iOS/macOS client | typed clients, async RPCs, URLSession WebSocket transport |
 | `protoc-gen-ws-kotlin` + `ws-proto-kotlin` | Kotlin | native Android/JVM client | typed clients, coroutine/Flow RPCs, OkHttp WebSocket transport |
-| [`protoc-gen-ws-cpp` + `ws-proto`](packages/ws-proto-cpp/README.md) | C++23 | native and WASM client | EasyP plugins, coroutine reads, host-provided binary connection, vcpkg packages |
+| [`protoc-gen-ws-cpp` + `ws-proto`](packages/ws-proto-cpp/README.md) | C++23 | native and WASM client and server | EasyP plugins, host-provided connection, in-process test loop, optional Boost.Asio adapter, vcpkg packages |
 
 The ES generator interoperates with [`protoc-gen-es`](https://github.com/bufbuild/protobuf-es)
 v2 output (it imports the generated `*_pb.ts` message types and schemas).

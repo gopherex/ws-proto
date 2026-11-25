@@ -11,10 +11,10 @@ trap 'rm -rf "$scratch"' EXIT
 cd "$root"
 vcpkg="$VCPKG_ROOT/vcpkg"
 "$vcpkg" install --classic --host-triplet "$host" \
-    "protobuf[libprotoc]:$host" "gtest:$host" "benchmark:$host" protobuf:wasm32-emscripten
+    "protobuf[libprotoc]:$host" "boost-asio:$host" "gtest:$host" "benchmark:$host" protobuf:wasm32-emscripten
 common=(-G Ninja -DCMAKE_BUILD_TYPE=Release "-DCMAKE_TOOLCHAIN_FILE=$toolchain" "-DVCPKG_HOST_TRIPLET=$host")
 cmake -S packages/ws-proto-cpp -B "$scratch/host" "${common[@]}" "-DVCPKG_TARGET_TRIPLET=$host" \
-    -DWS_PROTO_BUILD_TOOLS=ON -DWS_PROTO_BUILD_TESTS=ON
+    -DWS_PROTO_BUILD_TOOLS=ON -DWS_PROTO_BUILD_TESTS=ON -DWS_PROTO_WITH_ASIO=ON
 cmake --build "$scratch/host"
 ctest --test-dir "$scratch/host" --output-on-failure
 "$scratch/host/client_benchmark" --benchmark_min_time=0.1s

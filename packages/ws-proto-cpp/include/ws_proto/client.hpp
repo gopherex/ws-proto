@@ -33,6 +33,7 @@ struct Status {
 
 using Metadata = std::map<std::string, std::string>;
 using Clock = std::chrono::steady_clock;
+using Now = std::function<Clock::time_point()>;
 template<class T> using Result = std::expected<T, Status>;
 
 struct Options {
@@ -98,6 +99,7 @@ public:
     Call& operator=(Call&&) noexcept;
     ~Call();
     void cancel();
+    std::function<void()> canceller() const;
     ReadOperation read() const;
     const Metadata& headers() const;
     const Metadata& trailers() const;
@@ -116,13 +118,16 @@ class Session {
 public:
     Session(std::function<bool(std::string)> send, std::function<void()> close, Limits limits = {},
             std::function<void(const SessionEnd&)> on_end = {});
+    Session(std::function<bool(std::string)> send, std::function<void()> close, Limits limits,
+            std::function<void(const SessionEnd&)> on_end, Now now);
     Session(const Session&) = delete;
     Session& operator=(const Session&) = delete;
     ~Session();
     void opened(std::string_view negotiated_protocol);
     void receive(std::string_view message);
     void disconnected();
-    void expire(Clock::time_point now = Clock::now());
+    void expire();
+    void expire(Clock::time_point now);
     std::optional<Clock::time_point> next_deadline() const;
     bool is_open() const;
     const std::optional<SessionEnd>& end() const;
@@ -195,6 +200,7 @@ public:
     auto read() const requires ServerStreaming { return MessageRead<Response, false>(call_.stream_, response_map_); }
     auto result() const requires (!ServerStreaming) { return MessageRead<Response, true>(call_.stream_, response_map_, last_response_); }
     void cancel() { call_.cancel(); }
+    auto canceller() const { return call_.canceller(); }
     const Metadata& headers() const { return call_.headers(); }
     const Metadata& trailers() const { return call_.trailers(); }
     Signal headers_ready() const { return call_.headers_ready(); }

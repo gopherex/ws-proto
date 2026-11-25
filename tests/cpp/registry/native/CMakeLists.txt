@@ -1,0 +1,5 @@
+cmake_minimum_required(VERSION 3.22)
+project(installed_consumer LANGUAGES CXX)
+find_package(ws-proto CONFIG REQUIRED COMPONENTS server testing asio)
+add_executable(consumer main.cpp)
+target_link_libraries(consumer PRIVATE ws-proto::testing ws-proto::asio)

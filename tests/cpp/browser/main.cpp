@@ -1,4 +1,6 @@
 #include "proto/echo/v1/echo.ws.pb.h"
+#include "echo_server.hpp"
+#include <ws_proto/testing.hpp>
 #include <emscripten.h>
 #include <exception>
 
@@ -35,6 +37,23 @@ struct TestTask {
 #define CHECK(expr) do { if (!(expr)) { report(#expr); co_return; } } while (false)
 
 TestTask run() {
+    {
+        ws_proto::testing::Loopback pipe;
+        echo_fixture::register_echo(pipe.server);
+        pipe.open();
+        EchoServiceClient local(pipe.client);
+        BidiRequest request;
+        request.set_text("local WASM");
+        auto rpc = local.call_Bidi();
+        CHECK(rpc.write(request));
+        pipe.drain();
+        auto reply = co_await rpc.read();
+        CHECK(reply && *reply && (**reply).echo() == "local WASM");
+        rpc.close_send();
+        pipe.drain();
+        auto eof = co_await rpc.read();
+        CHECK(eof && !*eof);
+    }
     EchoServiceClient echo(session);
     UnaryRequest request;
     request.set_name("WASM");

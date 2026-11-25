@@ -1,5 +1,5 @@
 #include "ws_proto/client.hpp"
-#include "transport/transport.pb.h"
+#include "wire.hpp"
 
 #include <algorithm>
 #include <climits>
@@ -104,21 +104,11 @@ struct Stream {
     }
 };
 
-wire::Frame frame(std::uint32_t id, wire::Kind kind) {
-    wire::Frame value;
-    value.set_stream_id(id);
-    value.set_kind(kind);
-    return value;
-}
-
-Status peer_status(const wire::Status& value) {
-    return {static_cast<Code>(value.code()), value.message(), {value.details().begin(), value.details().end()}};
-}
-
 struct Connection {
     std::function<bool(std::string)> send;
     std::function<void()> close;
     Limits limits;
+    Now now;
     bool open = false;
     std::optional<SessionEnd> end;
     std::function<void(const SessionEnd&)> on_end;
@@ -175,7 +165,7 @@ struct Connection {
             if (frame.kind() == wire::KIND_OPEN) {
                 auto stream = active->second;
                 if (stream->deadline) {
-                    auto remaining = std::chrono::ceil<std::chrono::milliseconds>(*stream->deadline - Clock::now());
+                    auto remaining = std::chrono::ceil<std::chrono::milliseconds>(*stream->deadline - now());
                     if (remaining.count() <= 0) {
                         reset(stream, {Code::deadline_exceeded, "deadline exceeded"});
                         continue;
@@ -205,8 +195,7 @@ struct Connection {
         stream->set_terminal(std::move(status), true);
         if (stream->opened && !end) {
             auto envelope = frame(stream->id, wire::KIND_RST);
-            envelope.mutable_status()->set_code(static_cast<int>(stream->terminal->code));
-            envelope.mutable_status()->set_message(stream->terminal->message);
+            write_status(envelope, *stream->terminal);
             transmit(std::move(envelope));
         }
         stream->notify_finished();
@@ -240,7 +229,12 @@ using detail::frame;
 
 Session::Session(std::function<bool(std::string)> send, std::function<void()> close, Limits limits,
                  std::function<void(const SessionEnd&)> on_end)
+    : Session(std::move(send), std::move(close), limits, std::move(on_end), Clock::now) {}
+
+Session::Session(std::function<bool(std::string)> send, std::function<void()> close, Limits limits,
+                 std::function<void(const SessionEnd&)> on_end, Now now)
     : connection_(std::make_shared<detail::Connection>()) {
+    connection_->now = std::move(now);
     connection_->send = std::move(send);
     connection_->close = std::move(close);
     connection_->on_end = std::move(on_end);
@@ -287,7 +281,7 @@ Call Session::start_call(std::string_view method, Options options, MethodKind ki
         return Call(stream);
     }
     if (stream->deadline) {
-        auto remaining = std::chrono::ceil<std::chrono::milliseconds>(*stream->deadline - Clock::now());
+        auto remaining = std::chrono::ceil<std::chrono::milliseconds>(*stream->deadline - connection->now());
         if (remaining.count() <= 0) {
             stream->finish({Code::deadline_exceeded, "deadline exceeded"}, true);
             return Call(stream);
@@ -391,6 +385,8 @@ void Session::receive(std::string_view message) {
     }
 }
 
+void Session::expire() { expire(connection_->now()); }
+
 void Session::expire(Clock::time_point now) {
     auto connection = connection_;
     std::vector<std::shared_ptr<detail::Stream>> expired;
@@ -415,9 +411,15 @@ Call& Call::operator=(Call&& other) noexcept {
     return *this;
 }
 
-void Call::cancel() {
-    if (stream_ && !stream_->terminal)
-        if (auto connection = stream_->connection.lock()) connection->reset(stream_, {Code::cancelled, "cancelled"});
+static void cancel_call(const std::shared_ptr<detail::Stream>& stream) {
+    if (stream && !stream->terminal)
+        if (auto owner = stream->connection.lock()) owner->reset(stream, {Code::cancelled, "cancelled"});
+}
+
+void Call::cancel() { cancel_call(stream_); }
+
+std::function<void()> Call::canceller() const {
+    return [weak = std::weak_ptr(stream_)] { cancel_call(weak.lock()); };
 }
 
 void detail::RequestSide::fail(Status status) {

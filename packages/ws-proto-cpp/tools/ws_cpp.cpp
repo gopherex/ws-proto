@@ -81,7 +81,9 @@ private:
             const auto prefix = cpp::Namespace(file) + "::";
             auto conflicts = [&](const std::string& candidate) {
                 if (names.contains(prefix + candidate) || names.contains(prefix + candidate + "T")) return true;
-                return candidate.starts_with("call_") && service->FindMethodByName(candidate.substr(5) + "T");
+                for (std::string_view member : {"call_", "method_"})
+                    if (candidate.starts_with(member) && service->FindMethodByName(candidate.substr(member.size()) + "T")) return true;
+                return false;
             };
             for (int suffix = 2; conflicts(name); ++suffix) name = base + std::to_string(suffix);
             body << "\ntemplate<class Channel>\nclass " << name << "T {\npublic:\n"
@@ -93,13 +95,16 @@ private:
                 for (auto* type : {method->input_type(), method->output_type()})
                     includes.insert(cpp::StripProto(type->file()->name()) + ".pb.h");
                 const auto member = "call_" + std::string(method->name());
-                body << "\n    auto " << member << "(";
-                if (!method->client_streaming()) body << "const " << request << "& request, ";
-                body << "::ws_proto::Options options = {}) const {\n"
+                auto descriptor = "method_" + std::string(method->name());
+                body << "\n    static constexpr auto " << descriptor << "() {\n"
                      << "        using Rpc = ::ws_proto::Rpc<" << request << ", " << response << ", "
                      << std::boolalpha << method->client_streaming() << ", " << method->server_streaming() << ">;\n"
-                     << "        return channel_.invoke(::ws_proto::Method<Rpc>{\"/" << service->full_name() << "/" << method->name()
-                     << "\"}, ::std::move(options)";
+                     << "        return ::ws_proto::Method<Rpc>{\"/" << service->full_name() << "/" << method->name()
+                     << "\"};\n    }\n"
+                     << "    auto " << member << "(";
+                if (!method->client_streaming()) body << "const " << request << "& request, ";
+                body << "::ws_proto::Options options = {}) const {\n"
+                     << "        return channel_.invoke(" << descriptor << "(), ::std::move(options)";
                 if (!method->client_streaming()) body << ", request";
                 body << ");\n    }\n";
             }

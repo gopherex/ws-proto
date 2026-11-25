@@ -1,6 +1,6 @@
-# C++23 client
+# C++23 client and server
 
-Generate protobuf messages and typed clients with EasyP. Link the runtime into a native C++23 application or a WebAssembly module. The host provides one ordered, binary, message-oriented connection per session.
+Generate protobuf messages, typed clients and server method descriptors with EasyP. Link the runtime into a native C++23 application or a WebAssembly module. The host provides one ordered, binary, message-oriented connection per session.
 
 ## Install with vcpkg
 
@@ -73,6 +73,46 @@ Unary `result()` requires exactly one response and an OK final status. Client-st
 Use `co_await call.headers_ready()` before reading leading metadata through `headers()`. This also resolves with empty metadata when the first message or the end arrives without a header. `co_await call.finished()` waits for the terminal status and trailers independently of reading the data. `Options::on_header` and `on_trailer` provide the same notifications through callbacks. Each runs once, including on failure.
 
 For a client-streaming or bidi RPC, `call.write_from(next)` accepts an asynchronous request source. The runtime calls `next(Signal stop)` for each item. Its awaitable returns `Result<std::optional<Request>>`. An empty optional half-closes the request side. An error resets the RPC. An idle source subscribes its pending operation to `stop` so an early server response, cancellation, or local half-close releases its resources. A subscription detaches on destruction.
+
+## Serve RPCs
+
+Link `ws-proto::server` and include `<ws_proto/server.hpp>`. A `ServerSession` takes the host's send and close callbacks. Drive `opened(negotiated_protocol)`, `receive(frame)`, `disconnected()`, `expire(now)` and `next_deadline()` on the same serialized loop as the handlers. The server derives the call's local deadline from the remaining milliseconds in the OPEN frame. An optional final constructor argument supplies the monotonic clock.
+
+Register a method once using its generated descriptor. For example, given a callback or eager coroutine `serve_bidi` accepting a `TypedServerCall<BidiRequest, BidiResponse>` by value:
+
+```cpp
+ws_proto::ServerSession server(send_frame, close_socket);
+server.register_method(echo::v1::EchoServiceClient::method_Bidi(), serve_bidi);
+```
+
+The handler receives the call on OPEN. Read `call.headers()` for request metadata, including application keys such as `authorization` and `komeet-layer`. `call.deadline()` gives an optional monotonic time point. `co_await call.read()` returns a message, an empty optional on HALF_CLOSE, or a Status error. Use `call.send_headers(metadata)` before the first response, `call.write(message)` for responses, and `call.finish(status, trailers)` exactly once for the final status. Finishing drains admitted responses in order as the client returns window credit. A reset, transport loss or deadline wakes pending reads and raises `call.cancellation()`. Retain a call by value across suspension. With a lazy coroutine framework, launch the coroutine from the registered callback on the session loop. All four handler shapes are exercised in the [Echo server fixture](../../tests/cpp/echo_server.hpp).
+
+A raw handler can register a path and `MethodKind` and read/write serialized protobuf payloads through `ServerCall`. Registration returns false for duplicate paths. An unknown method finishes with `Unimplemented` and leaves sibling RPCs running.
+
+## Run both sessions in a test
+
+Link `ws-proto::testing` and include `<ws_proto/testing.hpp>`. A fresh `ws_proto::testing::Loopback` owns `client`, `server` and a manual monotonic clock. Register handlers on `pipe.server`. Queue the handshake with `pipe.open()`, or supply a different subprotocol. Leave the pipe unopened to test handshake deadlines. A send only queues bytes. `step()` delivers one eligible event, and `drain()` delivers until the queues are blocked or empty.
+
+Use `hold(direction, true/false)` to pause or release a direction, `delay(direction, duration)` for newly enqueued frames, and `inject(direction, bytes)` to enqueue a complete raw frame. Both directions preserve FIFO order. `advance(duration)` advances the clock and expires both sessions. Call `drain()` to deliver eligible frames afterward. `disconnect()` discards frames still in transit and queues a disconnect for both peers. [Test cases](../../tests/cpp/server_test.cpp)
+
+## Await operations in Boost.Asio
+
+Enable the vcpkg feature `ws-proto[asio]` (or configure the source build with `WS_PROTO_WITH_ASIO=ON`). Consumers of the base client, server and test loop need only protobuf.
+
+```cmake
+find_package(ws-proto CONFIG REQUIRED COMPONENTS asio)
+target_link_libraries(app PRIVATE ws-proto::asio)
+```
+
+Include `<ws_proto/asio.hpp>`. In an Asio coroutine on the serialized session executor:
+
+```cpp
+auto message = co_await ws_proto::asio::async_read(rpc, boost::asio::use_awaitable);
+auto result = co_await ws_proto::asio::async_result(unary_rpc, boost::asio::use_awaitable);
+auto ready = co_await ws_proto::asio::async_wait(rpc.headers_ready(), boost::asio::use_awaitable);
+```
+
+Results use the same `ws_proto::Result` types as the native operations, including remote status details and streaming EOF. Initiate the operation on the session loop. For a plain callback, or when its associated executor differs from the session loop, pass the session executor as the first argument. Deferred tokens need the RPC to live until initiation. Completion is posted to the handler's associated executor. Asio cancellation of a pending read or result cancels the RPC on the session loop. Cancellation of a signal wait detaches only that subscription. [Asio tests](../../tests/cpp/asio_test.cpp)
 
 ## Intercept generated calls
 

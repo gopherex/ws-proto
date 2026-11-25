@@ -3,5 +3,11 @@
   "dependencies": [
     { "name": "protoc-gen-ws-cpp", "host": true },
     "ws-proto"
-  ]
+  ],
+  "features": {
+    "asio": {
+      "description": "Exercise the optional Asio adapter from an installed package",
+      "dependencies": [{ "name": "ws-proto", "features": ["asio"] }]
+    }
+  }
 }
