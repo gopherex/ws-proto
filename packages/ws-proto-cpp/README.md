@@ -141,6 +141,10 @@ Each hook object can implement any of the following methods. The first hook pass
 
 An open hook calls `co_await next(options)` once to pass its options along, or returns an error to refuse the call before sending an OPEN. It can await readiness before continuing. Message hooks take a mutable protobuf message and can return a status to refuse it. The implementation instantiates the send and receive hook chains only when a hook implements the corresponding method. Finish sees the logical terminal result once and can map it. Hooks that wait on external work can use `context.stop` and `context.deadline`. Hooks run on the serialized executor and may interleave while suspended.
 
+A hook that keeps state of each call declares a nested `call_state` type. The channel makes a fresh value-initialized `call_state` for every logical call and passes it by reference as the last argument of that hook's methods: `open(method, options, next, context, state)`, `send(…, state)`, `receive(…, state)`, `attempt_failed(…, state)`, `finish(…, state)`. One state lives across the call's attempts, from open to finish, so a tracing hook starts its span in `open` and ends it in `finish`. A hook without `call_state` keeps the signatures above.
+
+Dropping a call's handle cancels it. A call whose handle is dropped before its first step still ends with a `cancelled` status.
+
 For streaming calls, await each `write()` before writing again or calling `close_send()`. One read can be outstanding independently of the write. A streaming producer can use `co_await call.write_from(next)`, where `next(stop)` returns an awaitable `Result<std::optional<Request>>`. An empty optional closes the request side. Unary and client-streaming calls use `co_await call.result()`. Stream reads return an empty optional for successful EOF. `finish()` waits for the status without consuming a message. For completion tokens, use `async_read`, `async_write`, `async_result`, or `async_finish` with the logical RPC. These overloads follow `boost::asio::co_spawn` completion signatures.
 
 ### Supply a host timer

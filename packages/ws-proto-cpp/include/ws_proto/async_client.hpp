@@ -11,6 +11,7 @@
 #include <cmath>
 #include <deque>
 #include <tuple>
+#include <variant>
 
 namespace ws_proto::asio {
 
@@ -51,6 +52,12 @@ struct ExponentialBackoff {
 };
 
 namespace detail {
+// A hook's own state of one call: `typename Hook::call_state`, made fresh for every call and passed to the
+// hook's methods as their last argument. A hook without it keeps no state of its own per call.
+template<class Hook> struct HookState { using type = std::monostate; };
+template<class Hook> requires requires { typename Hook::call_state; }
+struct HookState<Hook> { using type = typename Hook::call_state; };
+
 template<class T> using Awaitable = net::awaitable<T>;
 inline constexpr auto use = net::use_awaitable;
 
@@ -77,9 +84,12 @@ struct AsyncState : std::enable_shared_from_this<AsyncState<Timer, Method, Provi
     static constexpr bool uploads = Method::kind == MethodKind::bidi || Method::kind == MethodKind::client_streaming;
     static constexpr bool downloads = Method::kind == MethodKind::bidi || Method::kind == MethodKind::server_streaming;
     template<class Hook>
-    static constexpr bool can_retry = requires(Hook& hook, Method method, const AttemptFailure& failure, CallContext ctx) {
-        hook.attempt_failed(method, failure, ctx);
-    };
+    static constexpr bool can_retry =
+        requires(Hook& hook, Method method, const AttemptFailure& failure, CallContext ctx) {
+            hook.attempt_failed(method, failure, ctx);
+        } ||
+        requires(Hook& hook, Method method, const AttemptFailure& failure, CallContext ctx,
+                 typename HookState<Hook>::type& state) { hook.attempt_failed(method, failure, ctx, state); };
     static constexpr bool retries = (can_retry<Hooks> || ...);
 
     net::any_io_executor executor;
@@ -87,6 +97,7 @@ struct AsyncState : std::enable_shared_from_this<AsyncState<Timer, Method, Provi
     net::cancellation_signal run_cancel;
     Method method;
     std::shared_ptr<std::tuple<Provider, Hooks...>> chain;
+    std::tuple<typename HookState<Hooks>::type...> hook_states;
     Options options;
     std::optional<Call> call;
     SignalSource stop, finished, leading;
@@ -100,6 +111,9 @@ struct AsyncState : std::enable_shared_from_this<AsyncState<Timer, Method, Provi
     std::size_t retry_bytes = 0, retry_limit = 0;
     bool committed = !retries, half_closed = false, active = false, closing = false;
     bool reading = false, writing = false, passed_open = false, commit_after_replay = false;
+    // The supervising frame has started. Before it, a cancellation is only recorded: the frame sees `stopping`
+    // when it runs, while a cancellation signal emitted into its slot would throw out of co_spawn's own entry.
+    bool running = false;
 
     AsyncState(net::any_io_executor ex, Method method, std::shared_ptr<std::tuple<Provider, Hooks...>> chain,
                Options options)
@@ -107,6 +121,10 @@ struct AsyncState : std::enable_shared_from_this<AsyncState<Timer, Method, Provi
           chain(std::move(chain)), options(std::move(options)) {}
 
     CallContext context() { return {stop.signal(), options.deadline}; }
+
+    // The call state of the I-th hook (1-based, as in the chain after its provider).
+    template<std::size_t I>
+    auto& state_of() { return std::get<I - 1>(hook_states); }
 
     void commit() {
         if (std::exchange(committed, true)) return;
@@ -132,7 +150,7 @@ struct AsyncState : std::enable_shared_from_this<AsyncState<Timer, Method, Provi
         stop.notify();
         retry_timer.cancel();
         if (call) call->cancel();
-        run_cancel.emit(net::cancellation_type::terminal);
+        if (running) run_cancel.emit(net::cancellation_type::terminal);
         changed.notify();
     }
 
@@ -167,7 +185,9 @@ struct AsyncState : std::enable_shared_from_this<AsyncState<Timer, Method, Provi
         if constexpr (I <= sizeof...(Hooks)) {
             auto& hook = std::get<I>(*chain);
             auto next = [this](Options next_options) { return open<I + 1>(std::move(next_options)); };
-            if constexpr (requires { hook.open(method, opts, next, context()); }) {
+            if constexpr (requires { hook.open(method, opts, next, context(), state_of<I>()); }) {
+                co_return co_await hook.open(method, std::move(opts), next, context(), state_of<I>());
+            } else if constexpr (requires { hook.open(method, opts, next, context()); }) {
                 co_return co_await hook.open(method, std::move(opts), next, context());
             } else {
                 co_return co_await next(std::move(opts));
@@ -188,13 +208,21 @@ struct AsyncState : std::enable_shared_from_this<AsyncState<Timer, Method, Provi
     }
 
     template<class Hook>
-    static constexpr bool sends = requires(Hook& hook, Method method, Request& message, CallContext ctx) {
-        hook.send(method, message, ctx);
+    static constexpr bool sends_with_state = requires(Hook& hook, Method method, Request& message, CallContext ctx,
+                                                      typename HookState<Hook>::type& state) {
+        hook.send(method, message, ctx, state);
     };
     template<class Hook>
-    static constexpr bool receives = requires(Hook& hook, Method method, Response& message, CallContext ctx) {
-        hook.receive(method, message, ctx);
+    static constexpr bool sends = sends_with_state<Hook> ||
+        requires(Hook& hook, Method method, Request& message, CallContext ctx) { hook.send(method, message, ctx); };
+    template<class Hook>
+    static constexpr bool receives_with_state = requires(Hook& hook, Method method, Response& message,
+                                                         CallContext ctx, typename HookState<Hook>::type& state) {
+        hook.receive(method, message, ctx, state);
     };
+    template<class Hook>
+    static constexpr bool receives = receives_with_state<Hook> ||
+        requires(Hook& hook, Method method, Response& message, CallContext ctx) { hook.receive(method, message, ctx); };
 
     static constexpr bool intercept_sends = (sends<Hooks> || ...);
     static constexpr bool intercept_receives = (receives<Hooks> || ...);
@@ -204,7 +232,11 @@ struct AsyncState : std::enable_shared_from_this<AsyncState<Timer, Method, Provi
     Awaitable<Result<void>> send_hooks(Request& message) {
         if constexpr (I <= sizeof...(Hooks)) {
             auto& hook = std::get<I>(*chain);
-            if constexpr (sends<std::remove_reference_t<decltype(hook)>>) {
+            using Hook = std::remove_reference_t<decltype(hook)>;
+            if constexpr (sends_with_state<Hook>) {
+                auto result = co_await hook.send(method, message, context(), state_of<I>());
+                if (!result || stopping) co_return result;
+            } else if constexpr (sends<Hook>) {
                 auto result = co_await hook.send(method, message, context());
                 if (!result || stopping) co_return result;
             }
@@ -216,7 +248,11 @@ struct AsyncState : std::enable_shared_from_this<AsyncState<Timer, Method, Provi
     Awaitable<Result<void>> receive_hooks(Response& message) {
         if constexpr (I > 0) {
             auto& hook = std::get<I>(*chain);
-            if constexpr (receives<std::remove_reference_t<decltype(hook)>>) {
+            using Hook = std::remove_reference_t<decltype(hook)>;
+            if constexpr (receives_with_state<Hook>) {
+                auto result = co_await hook.receive(method, message, context(), state_of<I>());
+                if (!result || stopping) co_return result;
+            } else if constexpr (receives<Hook>) {
                 auto result = co_await hook.receive(method, message, context());
                 if (!result || stopping) co_return result;
             }
@@ -228,7 +264,10 @@ struct AsyncState : std::enable_shared_from_this<AsyncState<Timer, Method, Provi
     Awaitable<Status> finish_hooks(Status status) {
         if constexpr (I > 0) {
             auto& hook = std::get<I>(*chain);
-            if constexpr (requires { hook.finish(method, status, context()); }) {
+            if constexpr (requires { hook.finish(method, status, context(), state_of<I>()); }) {
+                try { status = co_await hook.finish(method, status, context(), state_of<I>()); }
+                catch (...) { status = {Code::internal, "finish interceptor threw"}; }
+            } else if constexpr (requires { hook.finish(method, status, context()); }) {
                 try { status = co_await hook.finish(method, status, context()); }
                 catch (...) { status = {Code::internal, "finish interceptor threw"}; }
             }
@@ -240,7 +279,9 @@ struct AsyncState : std::enable_shared_from_this<AsyncState<Timer, Method, Provi
     Awaitable<RetryDecision> retry_hooks(const AttemptFailure& failure) {
         if constexpr (I > 0) {
             auto& hook = std::get<I>(*chain);
-            if constexpr (requires { hook.attempt_failed(method, failure, context()); }) {
+            if constexpr (requires { hook.attempt_failed(method, failure, context(), state_of<I>()); }) {
+                co_return co_await hook.attempt_failed(method, failure, context(), state_of<I>());
+            } else if constexpr (requires { hook.attempt_failed(method, failure, context()); }) {
                 co_return co_await hook.attempt_failed(method, failure, context());
             } else co_return co_await retry_hooks<I - 1>(failure);
         } else co_return std::nullopt;
@@ -404,6 +445,7 @@ struct AsyncState : std::enable_shared_from_this<AsyncState<Timer, Method, Provi
     }
 
     static Awaitable<void> supervise(std::shared_ptr<AsyncState> self, std::optional<Request> first) {
+        self->running = true;
         Status status;
         try { status = co_await self->run(std::move(first)); }
         catch (...) { status = {Code::internal, "call interceptor threw"}; }

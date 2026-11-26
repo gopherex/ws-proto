@@ -1,3 +1,7 @@
+#include <algorithm>
+#include <string>
+#include <vector>
+
 #include <ws_proto/async_client.hpp>
 #include <ws_proto/testing.hpp>
 
@@ -24,6 +28,34 @@ struct Retry {
     }
     net::awaitable<Status> finish(auto, Status status, wa::CallContext) {
         ++finishes;
+        co_return status;
+    }
+};
+
+// Remembers per call what open saw and hands it to finish: two calls in flight never share their state.
+struct Traced {
+    struct call_state {
+        std::string request;
+        int attempts = 0;
+    };
+    std::vector<std::string>& finished;
+    template<class Method, class Next>
+    net::awaitable<Result<void>> open(Method, Options options, Next next, wa::CallContext, call_state& state) {
+        state.request = "open";
+        co_return co_await next(std::move(options));
+    }
+    net::awaitable<Result<void>> send(auto, Text& message, wa::CallContext, call_state& state) {
+        state.request = message.value();
+        co_return Result<void>{};
+    }
+    net::awaitable<wa::RetryDecision> attempt_failed(auto, const wa::AttemptFailure& failure, wa::CallContext,
+                                                     call_state& state) {
+        ++state.attempts;
+        if (failure.attempt == 1) co_return Clock::duration::zero();
+        co_return std::nullopt;
+    }
+    net::awaitable<Status> finish(auto, Status status, wa::CallContext, call_state& state) {
+        finished.push_back(state.request + ":" + std::to_string(state.attempts));
         co_return status;
     }
 };
@@ -597,4 +629,55 @@ TEST(AsyncClient, TemporaryRefusedCallCanFinishAcrossExecutorSteps) {
     EXPECT_EQ(retries, 0);
     EXPECT_EQ(finishes, 32);
     EXPECT_TRUE(io.stopped());
+}
+
+TEST(AsyncClient, EachCallHasItsOwnHookState) {
+    ws_proto::testing::Loopback pipe;
+    net::io_context io;
+    std::vector<std::string> finished;
+    int served = 0;
+    pipe.server.register_method(Method<Unary>{"/unary"}, [&](auto call) {
+        // The first attempt of all is refused once: only that call retries.
+        if (++served == 1) {
+            call.finish({Code::unavailable, "try again"});
+            return;
+        }
+        Text response;
+        response.set_value("ok");
+        EXPECT_TRUE(call.write(response));
+        call.finish();
+    });
+    pipe.open();
+    auto channel = wa::intercept_async(io.get_executor(), [&] { return &pipe.client; }, Traced{finished});
+    Text first, second;
+    first.set_value("a");
+    second.set_value("b");
+    auto first_rpc = channel.invoke(Method<Unary>{"/unary"}, {}, first);
+    auto second_rpc = channel.invoke(Method<Unary>{"/unary"}, {}, second);
+    auto one = net::co_spawn(io, first_rpc.result(), net::use_future);
+    auto two = net::co_spawn(io, second_rpc.result(), net::use_future);
+    pump(io, pipe);
+    ASSERT_EQ(one.wait_for(std::chrono::seconds(0)), std::future_status::ready);
+    ASSERT_EQ(two.wait_for(std::chrono::seconds(0)), std::future_status::ready);
+    EXPECT_TRUE(one.get().has_value());
+    EXPECT_TRUE(two.get().has_value());
+    std::sort(finished.begin(), finished.end());
+    EXPECT_EQ(finished, (std::vector<std::string>{"a:1", "b:0"}));
+}
+
+TEST(AsyncClient, ADroppedHandleCancelsItsCall) {
+    ws_proto::testing::Loopback pipe;
+    net::io_context io;
+    pipe.server.register_method(Method<Unary>{"/unary"}, [&](auto call) {
+        Text response;
+        response.set_value("ok");
+        EXPECT_TRUE(call.write(response));
+        call.finish();
+    });
+    pipe.open();
+    auto channel = wa::intercept_async(io.get_executor(), [&] { return &pipe.client; });
+    auto result = net::co_spawn(io, channel.invoke(Method<Unary>{"/unary"}, {}, Text{}).result(), net::use_future);
+    pump(io, pipe);
+    ASSERT_EQ(result.wait_for(std::chrono::seconds(0)), std::future_status::ready);
+    EXPECT_EQ(result.get().error().code, Code::cancelled);
 }
