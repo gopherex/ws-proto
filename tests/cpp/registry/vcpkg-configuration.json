@@ -4,7 +4,7 @@
       "kind": "git",
       "repository": "https://github.com/gopherex/ws-proto.git",
       "reference": "master",
-      "baseline": "1984f9bf08789ee77c5a92689e2faead9c73f0fa",
+      "baseline": "a080a529e24054cbd2668454e66111ec3cba0e00",
       "packages": ["ws-proto", "protoc-gen-ws-cpp"]
     }
   ]
