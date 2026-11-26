@@ -1,6 +1,6 @@
 {
   "name": "ws-proto",
-  "version-semver": "1.14.0-dev.2",
+  "version-semver": "1.14.0",
   "description": "C++23 protobuf RPC client and server for a host-provided WebSocket.",
   "homepage": "https://github.com/gopherex/ws-proto",
   "license": "MIT",
