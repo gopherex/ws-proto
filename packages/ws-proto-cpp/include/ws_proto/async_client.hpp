@@ -8,6 +8,7 @@
 #include <boost/asio/steady_timer.hpp>
 #include <boost/asio/use_awaitable.hpp>
 
+#include <cmath>
 #include <deque>
 #include <tuple>
 
@@ -26,6 +27,28 @@ struct AttemptFailure {
 
 // nullopt stops retries. A duration requests another attempt after that delay.
 using RetryDecision = std::optional<Clock::duration>;
+
+// The policy supplies entropy so tests are deterministic and callers control their RNG.
+struct ExponentialBackoff {
+    Clock::duration initial;
+    Clock::duration maximum;
+    double multiplier;
+    double jitter;
+    std::size_t max_attempts;
+
+    RetryDecision delay(std::size_t failed_attempt, double random_unit) const {
+        if (!failed_attempt || failed_attempt >= max_attempts || initial < Clock::duration::zero() ||
+            maximum < initial || !std::isfinite(multiplier) || multiplier < 1 ||
+            !(jitter >= 0 && jitter <= 1) || !(random_unit >= 0 && random_unit <= 1)) return {};
+        if (initial == Clock::duration::zero()) return initial;
+        const auto cap = static_cast<long double>(maximum.count());
+        const auto scaled = static_cast<long double>(initial.count()) *
+            std::pow(static_cast<long double>(multiplier), failed_attempt - 1);
+        const auto randomized = std::min(cap, scaled) * (1 + jitter * (2 * random_unit - 1));
+        if (randomized >= cap) return maximum;
+        return Clock::duration(static_cast<Clock::duration::rep>(randomized));
+    }
+};
 
 namespace detail {
 template<class T> using Awaitable = net::awaitable<T>;

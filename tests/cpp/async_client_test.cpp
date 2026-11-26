@@ -450,3 +450,13 @@ TEST(AsyncClient, DeadlineInterruptsBackoffAndPreventsAnotherAttempt) {
     EXPECT_EQ(outcome.get().error().code, Code::deadline_exceeded);
     EXPECT_EQ(served, 1);
 }
+
+TEST(AsyncClient, BackoffUsesExplicitSettingsAndEntropy) {
+    using namespace std::chrono_literals;
+    const wa::ExponentialBackoff backoff{
+        .initial=100ms, .maximum=250ms, .multiplier=2, .jitter=0.25, .max_attempts=4};
+    EXPECT_EQ(backoff.delay(1, 0), 75ms);
+    EXPECT_EQ(backoff.delay(2, 0.5), 200ms);
+    EXPECT_EQ(backoff.delay(3, 1), 250ms);
+    EXPECT_FALSE(backoff.delay(4, 0.5));
+}
