@@ -69,8 +69,8 @@ struct Event {
     std::optional<SignalSource> source;
 };
 
-template<class Method, class Provider, class... Hooks>
-struct AsyncState : std::enable_shared_from_this<AsyncState<Method, Provider, Hooks...>> {
+template<class Timer, class Method, class Provider, class... Hooks>
+struct AsyncState : std::enable_shared_from_this<AsyncState<Timer, Method, Provider, Hooks...>> {
     using Rpc = typename Method::CallType;
     using Request = typename Rpc::RequestType;
     using Response = typename Rpc::ResponseType;
@@ -83,7 +83,7 @@ struct AsyncState : std::enable_shared_from_this<AsyncState<Method, Provider, Ho
     static constexpr bool retries = (can_retry<Hooks> || ...);
 
     net::any_io_executor executor;
-    net::steady_timer deadline_timer, retry_timer;
+    Timer deadline_timer, retry_timer;
     net::cancellation_signal run_cancel;
     Method method;
     std::shared_ptr<std::tuple<Provider, Hooks...>> chain;
@@ -136,6 +136,18 @@ struct AsyncState : std::enable_shared_from_this<AsyncState<Method, Provider, Ho
         changed.notify();
     }
 
+    static void set_expiry(Timer& timer, Clock::time_point when) {
+        if constexpr (requires { timer.expires_at(when); }) {
+            timer.expires_at(when);
+        } else {
+            // Use bounded intervals for relative timers, which add their own clock reading.
+            const auto now = Clock::now();
+            constexpr auto maximum_interval = Clock::duration::max() / 2;
+            const auto limit = now + std::min(maximum_interval, Clock::time_point::max() - now);
+            timer.expires_after(std::max(Clock::duration::zero(), std::min(when, limit) - now));
+        }
+    }
+
     void arm_deadline() {
         deadline_timer.cancel();
         if (!options.deadline) return;
@@ -143,10 +155,10 @@ struct AsyncState : std::enable_shared_from_this<AsyncState<Method, Provider, Ho
             cancel({Code::deadline_exceeded, "deadline exceeded"});
             return;
         }
-        deadline_timer.expires_at(*options.deadline);
+        set_expiry(deadline_timer, *options.deadline);
         deadline_timer.async_wait([weak = this->weak_from_this()](boost::system::error_code ec) {
             if (!ec)
-                if (auto self = weak.lock()) self->cancel({Code::deadline_exceeded, "deadline exceeded"});
+                if (auto self = weak.lock(); self && !self->stopping && !self->closing) self->arm_deadline();
         });
     }
 
@@ -376,8 +388,11 @@ struct AsyncState : std::enable_shared_from_this<AsyncState<Method, Provider, Ho
                     if (retry) {
                         const auto delay = std::max(Clock::duration::zero(), *retry);
                         const auto now = Clock::now();
-                        retry_timer.expires_at(now + std::min(delay, Clock::time_point::max() - now));
-                        co_await retry_timer.async_wait(use);
+                        const auto retry_at = now + std::min(delay, Clock::time_point::max() - now);
+                        do {
+                            set_expiry(retry_timer, retry_at);
+                            co_await retry_timer.async_wait(use);
+                        } while (!stopping && Clock::now() < retry_at);
                         continue;
                     }
                 }
@@ -597,7 +612,7 @@ public:
     const Metadata& trailers() const { return state_->trailers; }
 };
 
-template<class Provider, class... Hooks>
+template<class Timer, class Provider, class... Hooks>
 class AsyncChannel {
     net::any_io_executor executor_;
     std::shared_ptr<std::tuple<Provider, Hooks...>> chain_;
@@ -608,7 +623,7 @@ public:
 
     template<class Method, class... Args>
     auto invoke(Method method, Options options, const Args&... args) {
-        using State = AsyncState<Method, Provider, Hooks...>;
+        using State = AsyncState<Timer, Method, Provider, Hooks...>;
         auto state = std::make_shared<State>(executor_, method, chain_, std::move(options));
         if constexpr (sizeof...(Args)) state->start(std::optional<typename State::Request>(args...));
         else state->start(std::nullopt);
@@ -618,9 +633,9 @@ public:
 } // namespace detail
 
 // Provider returns the session for this attempt, or nullptr if unavailable.
-template<class Provider, class... Hooks>
+template<class Timer = boost::asio::steady_timer, class Provider, class... Hooks>
 auto intercept_async(boost::asio::any_io_executor executor, Provider provider, Hooks... hooks) {
-    return detail::AsyncChannel<Provider, Hooks...>(std::move(executor), std::move(provider), std::move(hooks)...);
+    return detail::AsyncChannel<Timer, Provider, Hooks...>(std::move(executor), std::move(provider), std::move(hooks)...);
 }
 
 template<class Value, class Decoder>

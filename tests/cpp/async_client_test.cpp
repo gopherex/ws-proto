@@ -509,3 +509,49 @@ TEST(AsyncClient, BothOneWayStreamingKindsReplayBeforeCommit) {
     EXPECT_EQ(attempts, 2);
     EXPECT_EQ(finishes, 2);
 }
+
+namespace {
+class RelativeTimer {
+public:
+    explicit RelativeTimer(net::any_io_executor executor) : timer_(std::move(executor)) {}
+    RelativeTimer(const RelativeTimer&) = delete;
+
+    void expires_after(Clock::duration delay) { timer_.expires_after(delay); }
+    void cancel() { timer_.cancel(); }
+
+    template<class Token>
+    auto async_wait(Token&& token) { return timer_.async_wait(std::forward<Token>(token)); }
+
+private:
+    net::steady_timer timer_;
+};
+
+struct TimedRetry {
+    net::awaitable<wa::RetryDecision> attempt_failed(auto, const wa::AttemptFailure& failure, wa::CallContext) {
+        if (failure.attempt == 1) co_return std::chrono::milliseconds(10);
+        co_return std::nullopt;
+    }
+};
+} // namespace
+
+TEST(AsyncClient, RelativeTimerTypeDrivesRetryAndDeadline) {
+    using namespace std::chrono_literals;
+    ws_proto::testing::Loopback pipe;
+    net::io_context io;
+    int attempts = 0;
+    pipe.server.register_method(Method<Bidi>{"/live"}, [&](auto call) {
+        if (++attempts == 1) call.finish({Code::unavailable, "retry"});
+    });
+    pipe.open();
+    auto channel = wa::intercept_async<RelativeTimer>(io.get_executor(), [&] { return &pipe.client; }, TimedRetry{});
+    auto rpc = channel.invoke(Method<Bidi>{"/live"}, {.deadline = Clock::now() + 2s});
+    auto outcome = net::co_spawn(io, rpc.finish(), net::use_future);
+    pump(io, pipe);
+    ASSERT_EQ(attempts, 1);
+    io.run_for(30ms);
+    pump(io, pipe);
+    ASSERT_EQ(attempts, 2);
+    io.run_for(3s);
+    ASSERT_EQ(outcome.wait_for(0s), std::future_status::ready);
+    EXPECT_EQ(outcome.get().error().code, Code::deadline_exceeded);
+}

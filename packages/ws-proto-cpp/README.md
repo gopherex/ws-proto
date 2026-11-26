@@ -143,6 +143,12 @@ An open hook calls `co_await next(options)` once to pass its options along, or r
 
 For streaming calls, await each `write()` before writing again or calling `close_send()`. One read can be outstanding independently of the write. A streaming producer can use `co_await call.write_from(next)`, where `next(stop)` returns an awaitable `Result<std::optional<Request>>`. An empty optional closes the request side. Unary and client-streaming calls use `co_await call.result()`. Stream reads return an empty optional for successful EOF. `finish()` waits for the status without consuming a message. For completion tokens, use `async_read`, `async_write`, `async_result`, or `async_finish` with the logical RPC. These overloads follow `boost::asio::co_spawn` completion signatures.
 
+### Supply a host timer
+
+`intercept_async` defaults to `boost::asio::steady_timer`. In an externally pumped event loop, use `intercept_async<HostTimer>(executor, session_provider, hooks...)` for both the logical deadline and retry delay. For a browser worker, the host timer can schedule a JavaScript timeout and wake the worker's Asio pump when it posts the completion.
+
+The timer must be directly constructible from `boost::asio::any_io_executor` and support `expires_at(Clock::time_point)` or `expires_after(Clock::duration)` with a steady clock, `cancel()`, and `async_wait`. The wait accepts both `boost::asio::use_awaitable` and a completion handler taking `boost::system::error_code`. Expiry posts success to the serialized executor. Cancellation or rescheduling completes pending waits with `operation_aborted`. The channel uses neither timer moves nor an executor accessor.
+
 ### Retry before commit
 
 Implement `attempt_failed` to opt in. It receives the original status, trailers, a one-based attempt index and the logical call context. Return a duration to retry after that delay, or `std::nullopt` to decline. The innermost hook that implements this policy supplies the decision. An immediate repeat uses a zero duration. The consumer controls eligible methods and codes, attempt limits, jitter and any server-provided delay. An optional `asio::ExponentialBackoff` calculates delays from explicit initial and maximum durations, multiplier, jitter, maximum attempts (including the first) and a caller-supplied random sample in [0, 1]. The policy can return this delay or supply its own. The channel holds the timer and interrupts it on cancellation or the logical deadline.
