@@ -460,3 +460,52 @@ TEST(AsyncClient, BackoffUsesExplicitSettingsAndEntropy) {
     EXPECT_EQ(backoff.delay(3, 1), 250ms);
     EXPECT_FALSE(backoff.delay(4, 0.5));
 }
+
+TEST(AsyncClient, BothOneWayStreamingKindsReplayBeforeCommit) {
+    using Upload = Rpc<Text, Text, true, false>;
+    using Download = Rpc<Text, Text, false, true>;
+    ws_proto::testing::Loopback pipe;
+    net::io_context io;
+    int attempts = 0, finishes = 0;
+    std::vector<TypedServerCall<Text, Text>> uploads, downloads;
+    pipe.server.register_method(Method<Upload>{"/upload"}, [&](auto call) { uploads.push_back(call); });
+    pipe.server.register_method(Method<Download>{"/download"}, [&](auto call) { downloads.push_back(call); });
+    pipe.open();
+    auto channel = wa::intercept_async(io.get_executor(), [&] { return &pipe.client; }, Retry{attempts, finishes});
+
+    Text message;
+    message.set_value("bytes to replay");
+    auto up = channel.invoke(Method<Upload>{"/upload"}, {});
+    auto down = channel.invoke(Method<Download>{"/download"}, {}, message);
+    auto sent = net::co_spawn(io, up.write(message), net::use_future);
+    pump(io, pipe);
+    ASSERT_EQ(sent.wait_for(std::chrono::seconds(0)), std::future_status::ready);
+    ASSERT_TRUE(sent.get());
+    ASSERT_TRUE(up.close_send());
+    pump(io, pipe);
+    ASSERT_EQ(uploads.size(), 1);
+    ASSERT_EQ(downloads.size(), 1);
+    uploads[0].finish({Code::unavailable, "retry upload"});
+    downloads[0].finish({Code::unavailable, "retry download"});
+    pump(io, pipe);
+
+    ASSERT_EQ(uploads.size(), 2);
+    ASSERT_EQ(downloads.size(), 2);
+    for (auto* call : {&uploads.back(), &downloads.back()}) {
+        ASSERT_TRUE(call->read().await_ready());
+        EXPECT_EQ(call->read().await_resume().value()->value(), message.value());
+        ASSERT_TRUE(call->read().await_ready());
+        EXPECT_FALSE(call->read().await_resume().value());
+        EXPECT_TRUE(call->write(message));
+        call->finish();
+    }
+    auto result = net::co_spawn(io, up.result(), net::use_future);
+    auto response = net::co_spawn(io, down.read(), net::use_future);
+    pump(io, pipe);
+    ASSERT_EQ(result.wait_for(std::chrono::seconds(0)), std::future_status::ready);
+    ASSERT_EQ(response.wait_for(std::chrono::seconds(0)), std::future_status::ready);
+    EXPECT_EQ(result.get().value().value(), message.value());
+    EXPECT_EQ(response.get().value()->value(), message.value());
+    EXPECT_EQ(attempts, 2);
+    EXPECT_EQ(finishes, 2);
+}
