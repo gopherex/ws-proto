@@ -555,3 +555,46 @@ TEST(AsyncClient, RelativeTimerTypeDrivesRetryAndDeadline) {
     ASSERT_EQ(outcome.wait_for(0s), std::future_status::ready);
     EXPECT_EQ(outcome.get().error().code, Code::deadline_exceeded);
 }
+
+namespace {
+struct RefuseOpen {
+    template<class Method, class Next>
+    net::awaitable<Result<void>> open(Method, Options, Next, wa::CallContext) {
+        co_return std::unexpected(Status{Code::failed_precondition, "gate", {"typed detail"}});
+    }
+};
+
+template<class Channel>
+net::awaitable<void> expect_refused_calls(Channel& channel) {
+    for (int i = 0; i < 32; ++i) {
+        auto result = co_await channel.invoke(Method<Unary>{"/refused"}, {}, Text{}).result();
+        EXPECT_FALSE(result);
+        if (result) co_return;
+        EXPECT_EQ(result.error().status.code, Code::failed_precondition);
+        EXPECT_EQ(result.error().method_error, "typed detail");
+        co_await net::post(net::use_awaitable);
+    }
+}
+} // namespace
+
+TEST(AsyncClient, TemporaryRefusedCallCanFinishAcrossExecutorSteps) {
+    using namespace std::chrono_literals;
+    net::io_context io;
+    int opens = 0, retries = 0, finishes = 0;
+    auto channel = wa::intercept_async(io.get_executor(),
+        [&]() -> Session* { ++opens; return nullptr; }, RefuseOpen{}, Retry{retries, finishes});
+    auto decoded = wa::with_failure_decoder(channel, [](Method<Unary>) {
+        return [](const Status& status) -> std::optional<std::string> { return status.details.at(0); };
+    });
+    auto outcome = net::co_spawn(io, expect_refused_calls(decoded), net::use_future);
+    for (int i = 0; i < 1024 && !io.stopped(); ++i) {
+        if (i % 2 == 0) io.poll_one();
+        else io.run_for(1ms);
+    }
+    ASSERT_EQ(outcome.wait_for(0s), std::future_status::ready);
+    EXPECT_NO_THROW(outcome.get());
+    EXPECT_EQ(opens, 0);
+    EXPECT_EQ(retries, 0);
+    EXPECT_EQ(finishes, 32);
+    EXPECT_TRUE(io.stopped());
+}

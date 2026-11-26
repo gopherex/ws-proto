@@ -444,8 +444,11 @@ struct AsyncState : std::enable_shared_from_this<AsyncState<Timer, Method, Provi
     void start(std::optional<Request> first) {
         cancel_subscription = subscribe_cancellation(options.cancellation);
         arm_deadline();
+        // The completion handler owns the state: the spawned frame is bound to run_cancel's slot, and Asio clears
+        // that slot after the frame's locals are gone. Without this, supervise's own reference can be the last one,
+        // and the signal would die before its slot is cleared.
         net::co_spawn(executor, supervise(this->shared_from_this(), std::move(first)),
-            net::bind_cancellation_slot(run_cancel.slot(), [](std::exception_ptr error) {
+            net::bind_cancellation_slot(run_cancel.slot(), [keep_alive = this->shared_from_this()](std::exception_ptr error) {
                 if (error) std::terminate();
             }));
     }
