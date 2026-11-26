@@ -1,7 +1,7 @@
 vcpkg_from_git(
     OUT_SOURCE_PATH source
     URL https://github.com/gopherex/ws-proto.git
-    REF 5f00e005eb24df6a54de4e0b887978b39daf388d
+    REF 1c2a1a6659699fdf1483b8e0f961217a6ea6b038
 )
 
 vcpkg_check_features(OUT_FEATURE_OPTIONS feature_options FEATURES asio WS_PROTO_WITH_ASIO)
