@@ -49,6 +49,7 @@ struct Limits {
     std::size_t max_frame_bytes = 0;
     std::size_t max_queued_messages = 0;
     std::size_t max_preopen_bytes = 4 * 1024 * 1024;
+    std::size_t max_retry_buffer = 4 * 1024 * 1024;
 };
 
 enum class MethodKind { unary, server_streaming, client_streaming, bidi };
@@ -78,7 +79,7 @@ protected:
 
 class ReadOperation {
 public:
-    explicit ReadOperation(std::shared_ptr<detail::Stream> stream);
+    explicit ReadOperation(std::shared_ptr<detail::Stream> stream, bool return_credit = true);
     ReadOperation(const ReadOperation&) = delete;
     ReadOperation(ReadOperation&&) = delete;
     ~ReadOperation();
@@ -89,6 +90,7 @@ public:
 
 private:
     std::shared_ptr<detail::Stream> stream_;
+    bool return_credit_;
 };
 
 class Call : private detail::RequestSide {
@@ -101,10 +103,14 @@ public:
     void cancel();
     std::function<void()> canceller() const;
     ReadOperation read() const;
+    ReadOperation read_without_credit() const;
+    void return_credit(std::size_t bytes);
     const Metadata& headers() const;
     const Metadata& trailers() const;
     Signal headers_ready() const;
     Signal finished() const;
+    Signal response_started() const;
+    const std::optional<Status>& status() const;
     static Call completed(MethodKind kind, std::vector<std::string> responses, Status status, Options options,
                           Metadata headers, Metadata trailers);
 private:
@@ -131,6 +137,7 @@ public:
     std::optional<Clock::time_point> next_deadline() const;
     bool is_open() const;
     const std::optional<SessionEnd>& end() const;
+    const Limits& limits() const;
     Call start(std::string_view method, Options options, MethodKind kind);
     Call start(std::string_view method, Options options, bool single_response) {
         return start(method, std::move(options), single_response ? MethodKind::unary : MethodKind::bidi);
@@ -311,6 +318,22 @@ struct Method {
     using CallType = Rpc;
     static constexpr auto kind = Rpc::kind;
     std::string_view path;
+};
+
+namespace detail {
+template<std::size_t Size>
+struct MethodPath {
+    char text[Size];
+    constexpr MethodPath(const char (&path)[Size]) : text{} {
+        for (std::size_t i = 0; i < Size; ++i) text[i] = path[i];
+    }
+};
+} // namespace detail
+
+// Generated method identities are independent of the configured channel.
+template<detail::MethodPath Path, class Rpc>
+struct MethodDescriptor : Method<Rpc> {
+    constexpr MethodDescriptor() : Method<Rpc>{std::string_view(Path.text)} {}
 };
 
 template<class Next, class Handler>

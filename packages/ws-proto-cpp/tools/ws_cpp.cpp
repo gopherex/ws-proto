@@ -99,8 +99,8 @@ private:
                 body << "\n    static constexpr auto " << descriptor << "() {\n"
                      << "        using Rpc = ::ws_proto::Rpc<" << request << ", " << response << ", "
                      << std::boolalpha << method->client_streaming() << ", " << method->server_streaming() << ">;\n"
-                     << "        return ::ws_proto::Method<Rpc>{\"/" << service->full_name() << "/" << method->name()
-                     << "\"};\n    }\n"
+                     << "        return ::ws_proto::MethodDescriptor<\"/" << service->full_name() << "/" << method->name()
+                     << "\", Rpc>{};\n    }\n"
                      << "    auto " << member << "(";
                 if (!method->client_streaming()) body << "const " << request << "& request, ";
                 body << "::ws_proto::Options options = {}) const {\n"

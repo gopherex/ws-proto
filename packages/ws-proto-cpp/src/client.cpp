@@ -52,6 +52,13 @@ struct Stream {
     bool closing = false;
     bool half_closed = false;
     SignalSource leading, requests_closed, finished;
+    bool received_response = false;
+    std::optional<SignalSource> response_started;
+
+    void mark_response() {
+        if (std::exchange(received_response, true)) return;
+        if (response_started) response_started->notify();
+    }
     Subscription cancellation, header_hook, trailer_hook;
     std::optional<Status> terminal;
     std::optional<Clock::time_point> deadline;
@@ -261,6 +268,7 @@ void Session::disconnected() {
 
 bool Session::is_open() const { return connection_->open; }
 const std::optional<SessionEnd>& Session::end() const { return connection_->end; }
+const Limits& Session::limits() const { return connection_->limits; }
 
 Call Session::start(std::string_view method, Options options, MethodKind kind) {
     return start_call(method, std::move(options), kind, {});
@@ -328,6 +336,7 @@ void Session::receive(std::string_view message) {
     switch (envelope.kind()) {
     case wire::KIND_HEADER:
         if (!stream->leading.ready()) stream->headers.insert(envelope.headers().begin(), envelope.headers().end());
+        stream->mark_response();
         stream->leading.notify();
         return;
     case wire::KIND_WINDOW_UPDATE:
@@ -335,6 +344,8 @@ void Session::receive(std::string_view message) {
         connection->pump(stream);
         return;
     case wire::KIND_MSG: {
+        stream->mark_response();
+        if (stream->terminal) return;
         auto size = envelope.payload().size();
         if (stream->kind == MethodKind::client_streaming) {
             stream->incoming.clear();
@@ -468,6 +479,18 @@ const Metadata& Call::headers() const { return stream_->headers; }
 const Metadata& Call::trailers() const { return stream_->trailers; }
 Signal Call::headers_ready() const { return stream_->leading.signal(); }
 Signal Call::finished() const { return stream_->finished.signal(); }
+ReadOperation Call::read_without_credit() const { return ReadOperation(stream_, false); }
+void Call::return_credit(std::size_t bytes) {
+    auto stream = stream_;
+    if (!stream->terminal && !stream->single())
+        if (auto owner = stream->connection.lock()) owner->consumed(*stream, bytes);
+}
+Signal Call::response_started() const {
+    if (!stream_->response_started) stream_->response_started.emplace();
+    if (stream_->received_response) stream_->response_started->notify();
+    return stream_->response_started->signal();
+}
+const std::optional<Status>& Call::status() const { return stream_->terminal; }
 
 Call Call::completed(MethodKind kind, std::vector<std::string> responses, Status status, Options options,
                      Metadata headers, Metadata trailers) {
@@ -492,7 +515,8 @@ Call Call::completed(MethodKind kind, std::vector<std::string> responses, Status
 }
 ReadOperation Call::read() const { return ReadOperation(stream_); }
 
-ReadOperation::ReadOperation(std::shared_ptr<detail::Stream> stream) : stream_(std::move(stream)) {}
+ReadOperation::ReadOperation(std::shared_ptr<detail::Stream> stream, bool return_credit)
+    : stream_(std::move(stream)), return_credit_(return_credit) {}
 ReadOperation::~ReadOperation() {
     if (stream_->waiting == this) {
         stream_->waiting = nullptr;
@@ -514,7 +538,7 @@ Result<std::optional<std::string>> ReadOperation::await_resume() {
         auto bytes = std::move(stream_->incoming.front());
         stream_->incoming.pop_front();
         stream_->incoming_bytes -= bytes.size();
-        if (!stream_->terminal && !stream_->single())
+        if (return_credit_ && !stream_->terminal && !stream_->single())
             if (auto connection = stream_->connection.lock()) connection->consumed(*stream_, bytes.size());
         return std::optional(std::move(bytes));
     }

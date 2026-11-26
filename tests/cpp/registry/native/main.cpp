@@ -1,18 +1,24 @@
-#include <ws_proto/asio.hpp>
+#include <ws_proto/async_client.hpp>
 #include <ws_proto/testing.hpp>
+
 #include <boost/asio/io_context.hpp>
+#include <boost/asio/use_future.hpp>
+#include <google/protobuf/empty.pb.h>
 
 int main() {
-    ws_proto::testing::Loopback pipe;
-    pipe.server.register_method("/probe", ws_proto::MethodKind::bidi,
-        [](ws_proto::ServerCall call) { call.finish(); });
+    using namespace ws_proto;
+    using Message = google::protobuf::Empty;
+    using Probe = Rpc<Message, Message, true, true>;
+    testing::Loopback pipe;
+    pipe.server.register_method("/probe", MethodKind::bidi, [](ServerCall call) { call.finish(); });
     pipe.open();
-    auto rpc = pipe.client.start("/probe", {}, ws_proto::MethodKind::bidi);
+
     boost::asio::io_context loop;
-    bool completed = false;
-    ws_proto::asio::async_wait(loop.get_executor(), rpc.finished(),
-        [&](ws_proto::Result<void> r) { completed = r.has_value(); });
+    auto channel = asio::intercept_async(loop.get_executor(), [&] { return &pipe.client; });
+    auto rpc = channel.invoke(Method<Probe>{"/probe"}, {});
+    auto finished = asio::async_finish(rpc, boost::asio::use_future);
+    loop.poll();
     pipe.drain();
     loop.run();
-    return completed && rpc.finished().ready() ? 0 : 1;
+    return finished.get().has_value() ? 0 : 1;
 }

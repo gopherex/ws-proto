@@ -114,6 +114,47 @@ auto ready = co_await ws_proto::asio::async_wait(rpc.headers_ready(), boost::asi
 
 Results use the same `ws_proto::Result` types as the native operations, including remote status details and streaming EOF. Initiate the operation on the session loop. For a plain callback, or when its associated executor differs from the session loop, pass the session executor as the first argument. Deferred tokens need the RPC to live until initiation. Completion is posted to the handler's associated executor. A terminal Asio cancellation request (including `cancellation_type::all`) cancels a pending read or result and its RPC on the session loop. Cancellation of a signal wait detaches only that subscription. [Asio tests](../../tests/cpp/asio_test.cpp)
 
+## Intercept asynchronous calls
+
+Include `<ws_proto/async_client.hpp>` and link `ws-proto::asio`. Pass the generated client a channel created with `intercept_async(executor, session_provider, hooks...)`. The provider is called for each attempt and returns a `Session*`, or null while the host has no session. Keep each session on the same serialized executor as the logical calls that use it.
+
+```cpp
+auto channel = ws_proto::asio::intercept_async(
+    executor, [&] { return current_session; }, authentication, retry_policy);
+echo::v1::EchoServiceClientT client(channel);
+auto call = client.call_Bidi();
+auto sent = co_await call.write(request);
+if (!sent) co_return;
+auto response = co_await call.read();
+auto final = co_await call.finish();
+```
+
+Each hook object can implement any of the following methods. The first hook passed to the channel is the outermost.
+
+| Hook | Return type inside `boost::asio::awaitable` | Order |
+|---|---|---|
+| `open(method, options, next, context)` | `Result<void>` | Outer to inner |
+| `send(method, request, context)` | `Result<void>` | Outer to inner |
+| `receive(method, response, context)` | `Result<void>` | Inner to outer |
+| `attempt_failed(method, failure, context)` | `RetryDecision` | Inner to outer |
+| `finish(method, status, context)` | `Status` | Inner to outer |
+
+An open hook calls `co_await next(options)` once to pass its options along, or returns an error to refuse the call before sending an OPEN. It can await readiness before continuing. Message hooks take a mutable protobuf message and can return a status to refuse it. The implementation instantiates the send and receive hook chains only when a hook implements the corresponding method. Finish sees the logical terminal result once and can map it. Hooks that wait on external work can use `context.stop` and `context.deadline`. Hooks run on the serialized executor and may interleave while suspended.
+
+For streaming calls, await each `write()` before writing again or calling `close_send()`. One read can be outstanding independently of the write. A streaming producer can use `co_await call.write_from(next)`, where `next(stop)` returns an awaitable `Result<std::optional<Request>>`. An empty optional closes the request side. Unary and client-streaming calls use `co_await call.result()`. Stream reads return an empty optional for successful EOF. `finish()` waits for the status without consuming a message. For completion tokens, use `async_read`, `async_write`, `async_result`, or `async_finish` with the logical RPC. These overloads follow `boost::asio::co_spawn` completion signatures.
+
+### Retry before commit
+
+Implement `attempt_failed` to opt in. It receives the original status, trailers, a one-based attempt index and the logical call context. Return a duration to retry after that delay, or `std::nullopt` to decline. The innermost hook that implements this policy supplies the decision. An immediate repeat uses a zero duration. The consumer controls eligible methods and codes, attempt limits, jitter and any server-provided delay. The channel holds the timer and interrupts it on cancellation or the logical deadline.
+
+Receiving a HEADER or MSG commits the attempt, including an empty HEADER. Exceeding the per-RPC `Limits::max_retry_buffer` also commits it. The buffer charges serialized messages and their entry storage. Before commit, another attempt replays the buffered messages and a previous HALF_CLOSE in order. Replay uses the serialized result of the original outgoing hook chain. The session provider can select a replacement connection on the next attempt.
+
+### Decode application errors
+
+`ws_proto::Failure<E>` holds the original `Status` and an optional decoded `E`. A decoder takes `const Status&` and returns `std::optional<E>`. Use `decode_failure(result, decoder)` with a finished result, or `asio::with_failure(operation, decoder)` with an Asio awaitable.
+
+To apply a decoder to every terminal operation of a generated method, wrap the asynchronous channel with `asio::with_failure_decoder(channel, select)`. Overload `select` on `decltype(ServiceClient::method_Foo())` and return that method's decoder. The descriptor type is stable across channels and distinct for each method. Methods without a matching selector use `Result<T>`. The application owns the schema and its status-detail decoder.
+
 ## Intercept generated calls
 
 A generated `EchoServiceClient` uses a session directly. Its `EchoServiceClientT` form accepts a channel wrapped by one or more typed interceptors. The outermost interceptor runs first on requests and last on responses. Each receives the method path, kind, RPC type, options and, for unary or server-streaming calls, the request.
