@@ -681,3 +681,45 @@ TEST(AsyncClient, ADroppedHandleCancelsItsCall) {
     ASSERT_EQ(result.wait_for(std::chrono::seconds(0)), std::future_status::ready);
     EXPECT_EQ(result.get().error().code, Code::cancelled);
 }
+
+TEST(AsyncClient, ADeadlinePastAtStartEndsTheCallWithItsStatus) {
+    ws_proto::testing::Loopback pipe;
+    net::io_context io;
+    int served = 0;
+    pipe.server.register_method(Method<Unary>{"/unary"}, [&](auto call) {
+        ++served;
+        call.finish();
+    });
+    pipe.open();
+    auto channel = wa::intercept_async(io.get_executor(), [&] { return &pipe.client; });
+    Options options;
+    options.deadline = Clock::now() - std::chrono::seconds(1);
+    auto rpc = channel.invoke(Method<Unary>{"/unary"}, std::move(options), Text{});
+    auto result = net::co_spawn(io, rpc.result(), net::use_future);
+    pump(io, pipe);
+    ASSERT_EQ(result.wait_for(std::chrono::seconds(0)), std::future_status::ready);
+    EXPECT_EQ(result.get().error().code, Code::deadline_exceeded);
+    EXPECT_EQ(served, 0);
+}
+
+TEST(AsyncClient, ACancellationFiredBeforeStartEndsTheCallCancelled) {
+    ws_proto::testing::Loopback pipe;
+    net::io_context io;
+    int served = 0;
+    pipe.server.register_method(Method<Unary>{"/unary"}, [&](auto call) {
+        ++served;
+        call.finish();
+    });
+    pipe.open();
+    auto channel = wa::intercept_async(io.get_executor(), [&] { return &pipe.client; });
+    SignalSource source;
+    source.notify();
+    Options options;
+    options.cancellation = source.signal();
+    auto rpc = channel.invoke(Method<Unary>{"/unary"}, std::move(options), Text{});
+    auto result = net::co_spawn(io, rpc.result(), net::use_future);
+    pump(io, pipe);
+    ASSERT_EQ(result.wait_for(std::chrono::seconds(0)), std::future_status::ready);
+    EXPECT_EQ(result.get().error().code, Code::cancelled);
+    EXPECT_EQ(served, 0);
+}
