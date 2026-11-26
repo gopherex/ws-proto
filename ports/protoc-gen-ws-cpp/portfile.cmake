@@ -1,7 +1,7 @@
 vcpkg_from_git(
     OUT_SOURCE_PATH source
     URL https://github.com/gopherex/ws-proto.git
-    REF 5d4da719527f2672521ab8c03ed8d04b61ace089
+    REF 5f00e005eb24df6a54de4e0b887978b39daf388d
 )
 
 set(VCPKG_BUILD_TYPE release)

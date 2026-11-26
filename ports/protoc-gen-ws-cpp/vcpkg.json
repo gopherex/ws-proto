@@ -1,6 +1,6 @@
 {
   "name": "protoc-gen-ws-cpp",
-  "version-semver": "1.14.1",
+  "version-semver": "1.14.2",
   "description": "Host plugins for generating protobuf messages and ws-proto C++ clients.",
   "homepage": "https://github.com/gopherex/ws-proto",
   "license": "MIT",
